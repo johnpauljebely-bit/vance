@@ -50,6 +50,7 @@ function App() {
               element={
                 <AdminPlaceholder
                   title="Calendar / Queue"
+                  slug="calendar"
                   section="06"
                   copy="Timeline view of upcoming deadlines across every active order."
                   phase="Ships alongside Task Board polish"

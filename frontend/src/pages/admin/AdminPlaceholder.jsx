@@ -1,7 +1,8 @@
-export default function AdminPlaceholder({ title, section, copy, phase }) {
+export default function AdminPlaceholder({ title, section, copy, phase, slug }) {
+  const testSlug = slug || title.replace(/\s+/g, "-").toLowerCase();
   return (
     <div
-      data-testid={`admin-placeholder-${title.replace(/\s+/g, "-").toLowerCase()}`}
+      data-testid={`admin-placeholder-${testSlug}`}
       className="mx-auto max-w-2xl"
     >
       <div className="rounded-[24px] border-2 border-dashed border-[#1A1A1A]/15 bg-white p-10 md:p-14 text-center">

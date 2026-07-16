@@ -84,3 +84,34 @@ Solo designer's commission platform (VANCE). Public marketing site + admin dashb
 - Hash `ADMIN_PASSWORD` with bcrypt (passlib already installed).
 - Async httpx for storage calls (currently blocking `requests`).
 - Move admin JWT to httpOnly cookie for XSS resistance.
+
+---
+
+## ✅ Iteration 2 (2026-02-16 — later same day)
+
+### Design overhaul
+- New **Numbers** section (solid `#1A1A1A` bg) between Services and Process — big-stat "By the numbers · A studio built for momentum" callout, matches the strategic-black rhythm the user requested.
+- **Footer** switched to black bg (`#1A1A1A`) with white/orange text; the uploaded smiley mascot peeks from the bottom-right corner; adds a big "Let's build the brand you actually want" CTA row.
+- **Services / feature tiles** — Batch 2 icons (lightning/star/grid/board PNGs) integrated; icons roughly doubled in size (128–160px). Grid is asymmetric: one wide highlight tile + one tall + three regulars.
+- **Pricing** cards — no longer uniform white rectangles: one dark "Most Requested" card w/ orange CTA, one standard, one numbered "02", one dashed-border "Something else?" card.
+- **FAQ** — replaced shadcn accordion cards with a numbered hairline-divider list style + plus/minus circle toggle + a dashed pull-quote in the left column. Reads long-form, not templated.
+- **Hero mascot** scaled 1.25× on md+ breakpoints per user note.
+- **Smooth momentum scroll** via Lenis, with `prefers-reduced-motion` opt-out.
+
+### Phase 3 — Internal Dashboard
+- Sidebar-nav layout (9 numbered sections) + sticky admin header w/ time-of-day greeting + auth guard (redirects to `/staff/login` if no token).
+- **Dashboard home**: 4 stat tiles + Recent Requests feed + black Quick Actions card.
+- **Requests inbox**: Gmail-style list + detail; **Accept auto-creates an Order** and updates status per canonical list; Decline stores optional reason.
+- **Orders**: filterable table across all canonical statuses, semantic status pills.
+- **Task Board**: 5-column kanban (In Queue → Del. Awaiting Review) with arrow-based advance/back (no DnD yet — deferred to next iteration).
+- **Settings**: open_slots, total_slots, and portfolio_tags editors — writes back to singleton doc, updates `last_content_updated` so the public Terms/Privacy dates roll.
+- **Messages / Calendar / Templates / Analytics**: on-brand placeholder cards showing which phase each will ship in.
+
+### Tests (iteration 2)
+- 25/25 backend pytest pass (16 prior + 9 new admin).
+- Frontend flows verified end-to-end via testing subagent, including auth guard, request-accept → order-created, task-board advance, settings save, dashboard stats.
+
+### Fresh deferrals
+- Task Board drag-and-drop (currently arrow-nav — mentioned in the section copy).
+- Order detail page (Orders list is view-only for now; deep-dive activity log + revision counter ships alongside Messages in Phase 6).
+- Race-condition-safe `$push` for order activity log (currently full-array `$set`) — noted from code review.
