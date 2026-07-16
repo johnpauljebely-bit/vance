@@ -414,6 +414,246 @@ async def whoami(admin=Depends(require_admin)) -> dict:
     return {"email": admin["sub"], "role": admin["role"]}
 
 
+# ------------------------------------------------------------------ admin: requests inbox
+class RequestActionIn(BaseModel):
+    reason: Optional[str] = None
+
+
+@api.get("/admin/requests")
+async def admin_list_requests(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    admin=Depends(require_admin),
+) -> List[dict]:
+    query: dict = {}
+    if status_filter and status_filter != "All":
+        query["status"] = status_filter
+    docs = await db.requests.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return docs
+
+
+@api.post("/admin/requests/{request_id}/read")
+async def admin_mark_read(request_id: str, admin=Depends(require_admin)) -> dict:
+    result = await db.requests.update_one({"id": request_id}, {"$set": {"read": True}})
+    if result.matched_count == 0:
+        raise HTTPException(404, "Request not found")
+    return {"ok": True}
+
+
+@api.post("/admin/requests/{request_id}/accept")
+async def admin_accept_request(
+    request_id: str, payload: RequestActionIn, admin=Depends(require_admin)
+) -> dict:
+    req = await db.requests.find_one({"id": request_id})
+    if not req:
+        raise HTTPException(404, "Request not found")
+    if req.get("status") not in {"New", "Awaiting Response"}:
+        raise HTTPException(400, f"Cannot accept from status {req.get('status')}")
+
+    now = now_iso()
+    # Advance the request
+    await db.requests.update_one(
+        {"id": request_id},
+        {
+            "$set": {
+                "status": "Accepted – Awaiting Deposit",
+                "read": True,
+                "updated_at": now,
+            }
+        },
+    )
+    # Auto-create an Order
+    order_id = str(uuid.uuid4())
+    order = {
+        "id": order_id,
+        "request_id": request_id,
+        "client_name": req["name"],
+        "client_email": req["email"],
+        "commission_type": req.get("commission_type"),
+        "description": req.get("description"),
+        "budget": req.get("budget"),
+        "status": "Accepted – Awaiting Deposit",
+        "payment_status": "Deposit Pending",
+        "showcase_safe": True,
+        "revision_count": 0,
+        "activity": [
+            {"at": now, "note": f"Accepted by {admin['sub']}", "actor": "admin"},
+        ],
+        "reference_file_ids": req.get("reference_file_ids", []),
+        "created_at": now,
+        "updated_at": now,
+    }
+    await db.orders.insert_one(order)
+    # TODO(Phase 3.5): dispatch "Request Accepted" email via Nodemailer/SMTP.
+    logger.info("Request %s accepted → order %s created", request_id, order_id)
+    return {"ok": True, "order_id": order_id}
+
+
+@api.post("/admin/requests/{request_id}/decline")
+async def admin_decline_request(
+    request_id: str, payload: RequestActionIn, admin=Depends(require_admin)
+) -> dict:
+    req = await db.requests.find_one({"id": request_id})
+    if not req:
+        raise HTTPException(404, "Request not found")
+    now = now_iso()
+    await db.requests.update_one(
+        {"id": request_id},
+        {
+            "$set": {
+                "status": "Declined",
+                "read": True,
+                "decline_reason": payload.reason or None,
+                "updated_at": now,
+            }
+        },
+    )
+    # TODO(Phase 3.5): dispatch "Request Declined" email.
+    logger.info("Request %s declined", request_id)
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ admin: orders
+@api.get("/admin/orders")
+async def admin_list_orders(
+    status_filter: Optional[str] = Query(default=None, alias="status"),
+    admin=Depends(require_admin),
+) -> List[dict]:
+    query: dict = {}
+    if status_filter and status_filter != "All":
+        query["status"] = status_filter
+    docs = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return docs
+
+
+@api.get("/admin/orders/{order_id}")
+async def admin_get_order(order_id: str, admin=Depends(require_admin)) -> dict:
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Order not found")
+    return doc
+
+
+class OrderStatusIn(BaseModel):
+    status: str
+
+
+ALLOWED_ORDER_STATUSES = {
+    "Accepted – Awaiting Deposit",
+    "Awaiting Manual Payment Confirmation",
+    "In Queue",
+    "Sketching",
+    "Final Review",
+    "Delivered – Awaiting Final Payment",
+    "Delivered – Awaiting Review",
+    "Closed",
+}
+
+
+@api.patch("/admin/orders/{order_id}/status")
+async def admin_update_order_status(
+    order_id: str, payload: OrderStatusIn, admin=Depends(require_admin)
+) -> dict:
+    if payload.status not in ALLOWED_ORDER_STATUSES:
+        raise HTTPException(400, f"Invalid status: {payload.status}")
+
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+
+    # Closed requires a review submission — enforce doc rule.
+    if payload.status == "Closed":
+        review_count = await db.testimonials.count_documents({"order_id": order_id})
+        if review_count == 0:
+            raise HTTPException(400, "Cannot close: client review not submitted")
+
+    now = now_iso()
+    activity = order.get("activity", [])
+    activity.append(
+        {
+            "at": now,
+            "note": f"Status → {payload.status}",
+            "actor": "admin",
+        }
+    )
+    await db.orders.update_one(
+        {"id": order_id},
+        {"$set": {"status": payload.status, "updated_at": now, "activity": activity}},
+    )
+    return {"ok": True, "status": payload.status}
+
+
+# ------------------------------------------------------------------ admin: dashboard summary
+@api.get("/admin/dashboard/summary")
+async def admin_dashboard_summary(admin=Depends(require_admin)) -> dict:
+    now = datetime.now(timezone.utc)
+    month_start = datetime(now.year, now.month, 1, tzinfo=timezone.utc).isoformat()
+    open_requests = await db.requests.count_documents({"status": "New"})
+    active_orders = await db.orders.count_documents(
+        {"status": {"$in": ["In Queue", "Sketching", "Final Review"]}}
+    )
+    delivered_this_month = await db.orders.count_documents(
+        {
+            "status": {"$in": ["Delivered – Awaiting Review", "Closed"]},
+            "updated_at": {"$gte": month_start},
+        }
+    )
+    total_orders = await db.orders.count_documents({})
+    recent_requests = await db.requests.find(
+        {}, {"_id": 0}
+    ).sort("created_at", -1).to_list(6)
+    recent_orders = await db.orders.find(
+        {}, {"_id": 0, "activity": 0}
+    ).sort("updated_at", -1).to_list(6)
+    return {
+        "open_requests": open_requests,
+        "active_orders": active_orders,
+        "delivered_this_month": delivered_this_month,
+        "total_orders": total_orders,
+        "recent_requests": recent_requests,
+        "recent_orders": recent_orders,
+    }
+
+
+# ------------------------------------------------------------------ admin: settings
+class SettingsUpdateIn(BaseModel):
+    open_slots: Optional[int] = None
+    total_slots: Optional[int] = None
+    portfolio_tags: Optional[List[str]] = None
+
+
+@api.get("/admin/settings")
+async def admin_get_settings(admin=Depends(require_admin)) -> dict:
+    doc = await db.settings.find_one({"_id": "singleton"})
+    if not doc:
+        raise HTTPException(500, "Settings uninitialized")
+    doc.pop("_id", None)
+    return doc
+
+
+@api.patch("/admin/settings")
+async def admin_update_settings(
+    payload: SettingsUpdateIn, admin=Depends(require_admin)
+) -> dict:
+    updates: dict = {}
+    if payload.open_slots is not None:
+        if payload.open_slots < 0:
+            raise HTTPException(400, "open_slots must be ≥ 0")
+        updates["open_slots"] = int(payload.open_slots)
+    if payload.total_slots is not None:
+        if payload.total_slots < 1:
+            raise HTTPException(400, "total_slots must be ≥ 1")
+        updates["total_slots"] = int(payload.total_slots)
+    if payload.portfolio_tags is not None:
+        updates["portfolio_tags"] = [t.strip() for t in payload.portfolio_tags if t.strip()]
+    if not updates:
+        raise HTTPException(400, "No changes provided")
+    updates["last_content_updated"] = now_iso()
+    await db.settings.update_one({"_id": "singleton"}, {"$set": updates})
+    doc = await db.settings.find_one({"_id": "singleton"})
+    doc.pop("_id", None)
+    return doc
+
+
 def _safe_str_eq(a: str, b: str) -> bool:
     if len(a) != len(b):
         return False

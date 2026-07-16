@@ -1,7 +1,7 @@
 import { ASSETS } from "@/lib/brand";
 import { publicApi } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, Sparkles } from "lucide-react";
 
 export default function Hero() {
   const { data: settings } = useQuery({
@@ -15,14 +15,15 @@ export default function Hero() {
   return (
     <section
       data-testid="hero-section"
-      className="relative overflow-hidden pt-14 pb-24 md:pt-24 md:pb-36"
+      className="relative overflow-hidden pt-14 pb-24 md:pt-20 md:pb-32"
     >
       <div className="pointer-events-none absolute inset-0 grain-bg opacity-40" />
-      <div className="pointer-events-none absolute -top-32 -right-32 h-96 w-96 rounded-full bg-[#FF6B35]/10 blur-3xl" />
+      <div className="pointer-events-none absolute -top-32 -right-32 h-[36rem] w-[36rem] rounded-full bg-[#FF6B35]/10 blur-3xl" />
+      <div className="pointer-events-none absolute -bottom-40 -left-20 h-96 w-96 rounded-full bg-[#3B82F6]/8 blur-3xl" />
 
       <div className="relative mx-auto max-w-7xl px-6 md:px-10">
-        <div className="grid grid-cols-1 items-center gap-12 lg:grid-cols-12 lg:gap-8">
-          <div className="lg:col-span-7">
+        <div className="grid grid-cols-1 items-center gap-10 lg:grid-cols-12 lg:gap-6">
+          <div className="lg:col-span-6">
             <div
               data-testid="hero-slot-indicator"
               className={`inline-flex items-center gap-2 rounded-pill border px-3 py-1.5 text-xs font-semibold ${
@@ -43,7 +44,7 @@ export default function Hero() {
 
             <h1
               data-testid="hero-headline"
-              className="mt-6 text-5xl font-bold leading-[1.05] tracking-[-0.03em] md:text-6xl lg:text-7xl"
+              className="mt-6 text-5xl font-bold leading-[1.02] tracking-[-0.035em] md:text-6xl lg:text-7xl xl:text-[5.5rem]"
             >
               Design that actually{" "}
               <span className="accent-italic text-[#FF6B35]">ships.</span>
@@ -75,18 +76,19 @@ export default function Hero() {
             </div>
 
             <div className="dashed-quote mt-12 max-w-lg" data-testid="hero-callout">
+              <Sparkles size={18} className="inline -mt-1 mr-2 text-[#FF6B35] not-italic" />
               "One designer. One project at a time. No juniors, no outsourcing — just Vance."
             </div>
           </div>
 
-          <div className="lg:col-span-5 flex justify-center lg:justify-end">
+          <div className="lg:col-span-6 flex justify-center lg:justify-end">
             <div className="relative">
-              <div className="absolute -inset-8 rounded-full bg-white/60 blur-2xl" />
+              <div className="absolute -inset-16 rounded-full bg-white/70 blur-3xl" />
               <img
                 src={ASSETS.mascot}
                 alt="Cluster of colorful smileys — the Vance mascot"
                 data-testid="hero-mascot"
-                className="relative w-full max-w-md md:max-w-lg"
+                className="relative w-full max-w-2xl md:max-w-3xl lg:max-w-[44rem] scale-110 md:scale-125 origin-center"
                 draggable={false}
               />
             </div>

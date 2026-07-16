@@ -1,6 +1,7 @@
 // Central asset + copy references so any file can pull from one source.
 
 const CDN = "https://customer-assets-lxgj4vgw.emergentagent.net/job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts";
+const CDN2 = "https://customer-assets-lqy194kg.emergentagent.net/job_vance-wip/artifacts";
 
 export const ASSETS = {
   logoBlack: `${CDN}/2nhu3pin_Untitled%20design%20%284%29.png`,
@@ -8,6 +9,10 @@ export const ASSETS = {
   watermark: `${CDN}/pzblpyw9_Logo%20%2825%29.png`,
   mascot: `${CDN}/sipq6lrr_Showcase%20%283%29.png`,
   iconLock: `${CDN}/f826bkib_1.png`,
+  iconLightning: `${CDN2}/egvuba66_2.png`,
+  iconStar: `${CDN2}/9kxjnyjo_3.png`,
+  iconGrid: `${CDN2}/tj6c7gtc_4.png`,
+  iconBoard: `${CDN2}/yvx6pdop_5.png`,
 };
 
 // Placeholder portfolio imagery until real case studies are auto-generated in Phase 5.

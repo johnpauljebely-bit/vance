@@ -3,6 +3,7 @@ import Footer from "@/components/site/Footer";
 import Hero from "@/components/site/Hero";
 import Portfolio from "@/components/site/Portfolio";
 import Services from "@/components/site/Services";
+import Numbers from "@/components/site/Numbers";
 import HowItWorks from "@/components/site/HowItWorks";
 import Testimonials from "@/components/site/Testimonials";
 import Faq from "@/components/site/Faq";
@@ -14,12 +15,11 @@ export default function Home() {
   useReveal();
 
   useEffect(() => {
-    // Smooth-scroll to hash on load (for anchor links)
     if (window.location.hash) {
       const id = window.location.hash.slice(1);
       const el = document.getElementById(id);
       if (el) {
-        setTimeout(() => el.scrollIntoView({ behavior: "smooth" }), 300);
+        setTimeout(() => el.scrollIntoView({ behavior: "smooth" }), 400);
       }
     }
   }, []);
@@ -31,6 +31,7 @@ export default function Home() {
         <Hero />
         <Portfolio />
         <Services />
+        <Numbers />
         <HowItWorks />
         <Testimonials />
         <Faq />

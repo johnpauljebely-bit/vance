@@ -19,10 +19,11 @@ export default function StaffLogin() {
     if (!token) return;
     authApi.me().then(() => {
       toast.success("Already signed in");
+      navigate("/admin/dashboard");
     }).catch(() => {
       localStorage.removeItem("vance_admin_token");
     });
-  }, []);
+  }, [navigate]);
 
   const canSubmit = email.includes("@") && password.length > 0 && !submitting;
 
@@ -33,9 +34,8 @@ export default function StaffLogin() {
     try {
       const { access_token } = await authApi.adminLogin(email.trim(), password);
       localStorage.setItem("vance_admin_token", access_token);
-      toast.success("Signed in. Dashboard coming in Phase 3.");
-      // Placeholder — /admin route lands on 404 until Phase 3 ships.
-      navigate("/admin");
+      toast.success("Signed in.");
+      navigate("/admin/dashboard");
     } catch (err) {
       const msg = err?.response?.data?.detail || "Invalid credentials";
       toast.error(typeof msg === "string" ? msg : "Login failed");
