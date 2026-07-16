@@ -68,8 +68,8 @@ export const PORTFOLIO_TAG_ORDER = ["All", "Logo", "Brand Identity", "Social Kit
 
 export const COMMISSION_TYPES = [
   "Logo Design",
-  "Brand Identity Package",
-  "Social Media Kit",
+  "Banner Design",
+  "Brand Identity",
   "Custom Commission",
 ];
 

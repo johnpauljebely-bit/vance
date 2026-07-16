@@ -43,6 +43,28 @@ from passlib.hash import bcrypt
 from pydantic import BaseModel, BeforeValidator, ConfigDict, EmailStr, Field
 from starlette.middleware.cors import CORSMiddleware
 
+from email_service import (
+    email_deposit_confirmed,
+    email_magic_link,
+    email_new_message,
+    email_order_delivered,
+    email_request_accepted,
+    email_request_declined,
+    email_review_request,
+)
+from image_service import (
+    apply_watermark,
+    dominant_color_hex,
+    make_pattern_tile,
+    make_typography_tile,
+    place_angled,
+    place_flat,
+    recolor_logo,
+)
+from PIL import Image
+import io as _io
+import secrets
+
 # ------------------------------------------------------------------ env / config
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -55,6 +77,8 @@ JWT_EXPIRES_MIN = int(os.environ.get("JWT_EXPIRES_MINUTES", "1440"))
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@vance.design")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "hello@vance.design")
+
+CLIENT_DEV_PASSWORD = os.environ.get("CLIENT_DEV_PASSWORD", "DEVTEST")
 
 STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
 EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
@@ -265,6 +289,64 @@ async def on_startup() -> None:
             }
         )
         logger.info("Seeded default settings")
+
+    # Seed mockup library
+    if await db.mockups.count_documents({}) == 0:
+        cdn2 = "https://customer-assets-lqy194kg.emergentagent.net/job_vance-wip/artifacts"
+        mockups_seed = [
+            {
+                "id": "mk-xtwitter",
+                "label": "X/Twitter profile",
+                "category": "social",
+                "url": f"{cdn2}/pbiu0vt7_Untitled%2020.png",
+                "placement_type": "flat",
+                "zone": [615, 470, 380, 380],
+                "logo_hex": "#000000",
+                "requirement": "Black logo, avatar zone",
+            },
+            {
+                "id": "mk-bizcard",
+                "label": "Business card on tiles",
+                "category": "print",
+                "url": f"{cdn2}/q70gqakf_Untitled%2020%20%281%29.png",
+                "placement_type": "flat",
+                "zone": [720, 490, 380, 220],
+                "logo_hex": "#000000",
+                "requirement": "Black logo, transparent bg",
+            },
+            {
+                "id": "mk-phoneinhand",
+                "label": "Phone in hand",
+                "category": "device",
+                "url": f"{cdn2}/ddlhgonq_hands_iphones_preview_4_5cc96b583d.png",
+                "placement_type": "flat",
+                "zone": [800, 500, 320, 320],
+                "logo_hex": "#FFFFFF",
+                "requirement": "White logo, transparent bg",
+            },
+            {
+                "id": "mk-eventpass",
+                "label": "Event pass / badge",
+                "category": "print",
+                "url": f"{cdn2}/nd180i8r_for%20apparel%20either%20black%20logo%20or%20white%20logo%20both%20transparent%20bg%20and%20make%20it%20small%20ish%20and%20center%20it%20as%20shown%203rd%20image.png",
+                "placement_type": "flat",
+                "zone": [820, 620, 260, 220],
+                "logo_hex": "#000000",
+                "requirement": "Black logo, transparent bg",
+            },
+            {
+                "id": "mk-aframe",
+                "label": "A-frame sandwich board",
+                "category": "environmental",
+                "url": f"{cdn2}/5a89v76s_for%20apparel%20either%20black%20logo%20or%20white%20logo%20both%20transparent%20bg%20and%20make%20it%20small%20ish%20and%20center%20it%20as%20shown%203rd%20image%20%281%29.png",
+                "placement_type": "angled",
+                "corners": [[460, 250], [880, 240], [870, 610], [470, 620]],
+                "logo_hex": "#000000",
+                "requirement": "Black logo, transparent bg",
+            },
+        ]
+        await db.mockups.insert_many(mockups_seed)
+        logger.info("Seeded %d mockups", len(mockups_seed))
 
 
 @app.on_event("shutdown")
@@ -483,7 +565,7 @@ async def admin_accept_request(
         "updated_at": now,
     }
     await db.orders.insert_one(order)
-    # TODO(Phase 3.5): dispatch "Request Accepted" email via Nodemailer/SMTP.
+    email_request_accepted(to=req["email"], name=req["name"], order_id=order_id)
     logger.info("Request %s accepted → order %s created", request_id, order_id)
     return {"ok": True, "order_id": order_id}
 
@@ -579,6 +661,15 @@ async def admin_update_order_status(
         {"id": order_id},
         {"$set": {"status": payload.status, "updated_at": now, "activity": activity}},
     )
+    # Fire status-based emails
+    try:
+        if payload.status == "In Queue":
+            email_deposit_confirmed(to=order["client_email"], name=order["client_name"], order_id=order_id)
+        elif payload.status in ("Delivered – Awaiting Final Payment", "Delivered – Awaiting Review"):
+            email_order_delivered(to=order["client_email"], name=order["client_name"], order_id=order_id)
+            email_review_request(to=order["client_email"], name=order["client_name"], order_id=order_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Status email failed: %s", exc)
     return {"ok": True, "status": payload.status}
 
 
@@ -661,6 +752,568 @@ def _safe_str_eq(a: str, b: str) -> bool:
     for x, y in zip(a, b):
         result |= ord(x) ^ ord(y)
     return result == 0
+
+
+# ------------------------------------------------------------------ client portal auth (magic-link + DEVTEST bypass)
+def create_client_token(email: str, name: Optional[str] = None) -> str:
+    payload = {
+        "sub": email.lower(),
+        "role": "client",
+        "name": name,
+        "exp": datetime.now(timezone.utc) + timedelta(days=30),
+        "iat": datetime.now(timezone.utc),
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm="HS256")
+
+
+def require_client(authorization: Optional[str] = Header(default=None)) -> dict:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(401, "Missing bearer token")
+    token = authorization.split(" ", 1)[1].strip()
+    payload = _decode_token(token)
+    if payload.get("role") != "client":
+        raise HTTPException(403, "Client only")
+    return payload
+
+
+class PortalLoginIn(BaseModel):
+    email: EmailStr
+    password: Optional[str] = None
+
+
+class PortalVerifyIn(BaseModel):
+    token: str
+
+
+@api.post("/portal/login")
+async def portal_login(payload: PortalLoginIn) -> dict:
+    """Two modes:
+    - DEVTEST password → immediate session (dev shortcut per user's request)
+    - No password → generate one-time magic link, email it, return {sent:true}
+    """
+    email = payload.email.lower()
+    # DEV shortcut
+    if payload.password and payload.password == CLIENT_DEV_PASSWORD:
+        # Ensure at least one order exists for this email? Not required.
+        req = await db.requests.find_one({"email": email})
+        name = req["name"] if req else email.split("@")[0]
+        return {
+            "mode": "password",
+            "access_token": create_client_token(email, name),
+            "email": email,
+        }
+
+    # Magic-link mode: block emails with no prior request to prevent spam scans
+    req = await db.requests.find_one({"email": email})
+    if not req:
+        # Same success response — don't leak whether the email exists
+        return {"mode": "magic-link", "sent": True}
+
+    link_token = secrets.token_urlsafe(32)
+    await db.magic_links.insert_one(
+        {
+            "token": link_token,
+            "email": email,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+            "used": False,
+            "created_at": now_iso(),
+        }
+    )
+    email_magic_link(to=email, name=req["name"], link_token=link_token)
+    return {"mode": "magic-link", "sent": True}
+
+
+@api.post("/portal/verify")
+async def portal_verify(payload: PortalVerifyIn) -> dict:
+    record = await db.magic_links.find_one({"token": payload.token, "used": False})
+    if not record:
+        raise HTTPException(400, "Invalid or already-used link")
+    if datetime.fromisoformat(record["expires_at"]) < datetime.now(timezone.utc):
+        raise HTTPException(400, "Link expired")
+    await db.magic_links.update_one({"token": payload.token}, {"$set": {"used": True}})
+    email = record["email"]
+    req = await db.requests.find_one({"email": email})
+    name = req["name"] if req else email.split("@")[0]
+    return {"access_token": create_client_token(email, name), "email": email}
+
+
+@api.get("/portal/me")
+async def portal_me(client=Depends(require_client)) -> dict:
+    return {"email": client["sub"], "name": client.get("name"), "role": client["role"]}
+
+
+# ------------------------------------------------------------------ client portal — orders
+@api.get("/portal/orders")
+async def portal_list_orders(client=Depends(require_client)) -> List[dict]:
+    email = client["sub"]
+    docs = await db.orders.find(
+        {"client_email": email}, {"_id": 0, "activity": 0}
+    ).sort("created_at", -1).to_list(100)
+    return docs
+
+
+@api.get("/portal/orders/{order_id}")
+async def portal_get_order(order_id: str, client=Depends(require_client)) -> dict:
+    doc = await db.orders.find_one(
+        {"id": order_id, "client_email": client["sub"]}, {"_id": 0}
+    )
+    if not doc:
+        raise HTTPException(404, "Order not found")
+    return doc
+
+
+# ------------------------------------------------------------------ messages (shared: admin + client)
+class MessageIn(BaseModel):
+    body: str = Field(..., min_length=1, max_length=10000)
+    attachment_file_ids: List[str] = Field(default_factory=list)
+
+
+async def _persist_message(order_id: str, from_side: str, body: str, attachments: list) -> dict:
+    doc = {
+        "id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "from_side": from_side,  # "admin" | "client"
+        "body": body,
+        "attachment_file_ids": attachments,
+        "read_by_admin": from_side == "admin",
+        "read_by_client": from_side == "client",
+        "created_at": now_iso(),
+    }
+    await db.messages.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.get("/admin/orders/{order_id}/messages")
+async def admin_list_messages(order_id: str, admin=Depends(require_admin)) -> List[dict]:
+    docs = await db.messages.find({"order_id": order_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    # Mark client → admin messages as read
+    await db.messages.update_many(
+        {"order_id": order_id, "from_side": "client", "read_by_admin": False},
+        {"$set": {"read_by_admin": True}},
+    )
+    return docs
+
+
+@api.post("/admin/orders/{order_id}/messages")
+async def admin_send_message(
+    order_id: str, payload: MessageIn, admin=Depends(require_admin)
+) -> dict:
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    msg = await _persist_message(order_id, "admin", payload.body, payload.attachment_file_ids)
+    # Fire-and-forget email notification to client
+    email_new_message(
+        to=order["client_email"],
+        name=order["client_name"],
+        order_id=order_id,
+        preview=payload.body,
+        from_side="admin",
+    )
+    return msg
+
+
+@api.get("/portal/orders/{order_id}/messages")
+async def portal_list_messages(order_id: str, client=Depends(require_client)) -> List[dict]:
+    order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    docs = await db.messages.find({"order_id": order_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    await db.messages.update_many(
+        {"order_id": order_id, "from_side": "admin", "read_by_client": False},
+        {"$set": {"read_by_client": True}},
+    )
+    return docs
+
+
+@api.post("/portal/orders/{order_id}/messages")
+async def portal_send_message(
+    order_id: str, payload: MessageIn, client=Depends(require_client)
+) -> dict:
+    order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    msg = await _persist_message(order_id, "client", payload.body, payload.attachment_file_ids)
+    email_new_message(
+        to=ADMIN_EMAIL,
+        name="Vance",
+        order_id=order_id,
+        preview=payload.body,
+        from_side="client",
+    )
+    return msg
+
+
+# ------------------------------------------------------------------ reviews (client submits)
+class ReviewIn(BaseModel):
+    quote: str = Field(..., min_length=10, max_length=1000)
+    rating: int = Field(default=5, ge=1, le=5)
+
+
+@api.post("/portal/orders/{order_id}/review")
+async def portal_submit_review(
+    order_id: str, payload: ReviewIn, client=Depends(require_client)
+) -> dict:
+    order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    # One review per order
+    existing = await db.testimonials.find_one({"order_id": order_id})
+    if existing:
+        raise HTTPException(400, "Review already submitted")
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "client_name": order["client_name"],
+        "quote": payload.quote.strip(),
+        "rating": int(payload.rating),
+        "approved": False,  # admin approves before it appears publicly
+        "created_at": now_iso(),
+    }
+    await db.testimonials.insert_one(doc)
+    # Advance order → Closed
+    await db.orders.update_one(
+        {"id": order_id},
+        {"$set": {"status": "Closed", "updated_at": now_iso()}, "$push": {"activity": {"at": now_iso(), "note": "Client submitted review", "actor": "client"}}},
+    )
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ portfolio CRUD (admin)
+class PortfolioIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    tags: List[str] = Field(default_factory=list)
+    cover_image_url: str
+    description: Optional[str] = None
+    accent_color: Optional[str] = None
+    home_visible: bool = False
+    published: bool = True
+
+
+@api.get("/admin/portfolio")
+async def admin_list_portfolio(admin=Depends(require_admin)) -> List[dict]:
+    docs = await db.portfolio.find({}, {"_id": 0}).sort("order", 1).to_list(500)
+    return docs
+
+
+@api.post("/admin/portfolio")
+async def admin_create_portfolio(payload: PortfolioIn, admin=Depends(require_admin)) -> dict:
+    if payload.home_visible:
+        home_count = await db.portfolio.count_documents({"home_visible": True})
+        if home_count >= 5:
+            raise HTTPException(400, "At most 5 items can be home-visible. Un-toggle one first.")
+    order_val = await db.portfolio.count_documents({})
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": payload.title.strip(),
+        "tags": payload.tags,
+        "cover_image_url": payload.cover_image_url,
+        "description": payload.description,
+        "accent_color": payload.accent_color,
+        "home_visible": payload.home_visible,
+        "published": payload.published,
+        "order": order_val,
+        "created_at": now_iso(),
+    }
+    await db.portfolio.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+class PortfolioPatch(BaseModel):
+    title: Optional[str] = None
+    tags: Optional[List[str]] = None
+    cover_image_url: Optional[str] = None
+    description: Optional[str] = None
+    accent_color: Optional[str] = None
+    home_visible: Optional[bool] = None
+    published: Optional[bool] = None
+    order: Optional[int] = None
+
+
+@api.patch("/admin/portfolio/{item_id}")
+async def admin_update_portfolio(item_id: str, payload: PortfolioPatch, admin=Depends(require_admin)) -> dict:
+    existing = await db.portfolio.find_one({"id": item_id})
+    if not existing:
+        raise HTTPException(404, "Portfolio item not found")
+
+    updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    if updates.get("home_visible") and not existing.get("home_visible"):
+        home_count = await db.portfolio.count_documents({"home_visible": True})
+        if home_count >= 5:
+            raise HTTPException(400, "At most 5 items can be home-visible.")
+
+    if not updates:
+        raise HTTPException(400, "No changes provided")
+    await db.portfolio.update_one({"id": item_id}, {"$set": updates})
+    doc = await db.portfolio.find_one({"id": item_id}, {"_id": 0})
+    return doc
+
+
+@api.delete("/admin/portfolio/{item_id}")
+async def admin_delete_portfolio(item_id: str, admin=Depends(require_admin)) -> dict:
+    result = await db.portfolio.delete_one({"id": item_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Portfolio item not found")
+    return {"ok": True}
+
+
+# Overwrite public /portfolio to sort by `order` and support home-only filter
+@api.get("/portfolio/home")
+async def list_portfolio_home() -> List[dict]:
+    docs = await db.portfolio.find(
+        {"published": True, "home_visible": True}, {"_id": 0}
+    ).sort("order", 1).limit(5).to_list(5)
+    return docs
+
+
+@api.get("/portfolio/{item_id}")
+async def get_portfolio_item(item_id: str) -> dict:
+    doc = await db.portfolio.find_one({"id": item_id, "published": True}, {"_id": 0})
+    if not doc:
+        raise HTTPException(404, "Portfolio item not found")
+    return doc
+
+
+# ------------------------------------------------------------------ automation settings (watermark + mockups)
+class AutomationSettingsIn(BaseModel):
+    watermark_opacity: Optional[float] = Field(default=None, ge=0.05, le=1.0)
+    watermark_size_pct: Optional[float] = Field(default=None, ge=0.05, le=1.0)
+
+
+@api.get("/admin/automation")
+async def admin_get_automation(admin=Depends(require_admin)) -> dict:
+    doc = await db.settings.find_one({"_id": "singleton"}) or {}
+    return {
+        "watermark_opacity": doc.get("watermark_opacity", 0.35),
+        "watermark_size_pct": doc.get("watermark_size_pct", 0.35),
+        "watermark_url": (
+            "https://customer-assets-lxgj4vgw.emergentagent.net/"
+            "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/"
+            "pzblpyw9_Logo%20%2825%29.png"
+        ),
+        "mockup_count": await db.mockups.count_documents({}),
+    }
+
+
+@api.patch("/admin/automation")
+async def admin_update_automation(payload: AutomationSettingsIn, admin=Depends(require_admin)) -> dict:
+    updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    if not updates:
+        raise HTTPException(400, "No changes provided")
+    updates["last_content_updated"] = now_iso()
+    await db.settings.update_one({"_id": "singleton"}, {"$set": updates})
+    return await admin_get_automation(admin=admin)
+
+
+# ------------------------------------------------------------------ mockups library
+@api.get("/admin/mockups")
+async def admin_list_mockups(admin=Depends(require_admin)) -> List[dict]:
+    docs = await db.mockups.find({}, {"_id": 0}).sort("category", 1).to_list(100)
+    return docs
+
+
+# ------------------------------------------------------------------ auto-watermark preview
+class WatermarkPreviewIn(BaseModel):
+    logo_url: str
+
+
+@api.post("/admin/watermark/preview")
+async def admin_watermark_preview(payload: WatermarkPreviewIn, admin=Depends(require_admin)) -> Response:
+    settings = await db.settings.find_one({"_id": "singleton"}) or {}
+    opacity = float(settings.get("watermark_opacity", 0.35))
+    size_pct = float(settings.get("watermark_size_pct", 0.35))
+    wm_url = (
+        "https://customer-assets-lxgj4vgw.emergentagent.net/"
+        "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/"
+        "pzblpyw9_Logo%20%2825%29.png"
+    )
+    try:
+        data = apply_watermark(payload.logo_url, wm_url, opacity=opacity, size_pct=size_pct)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"Watermark failed: {exc}") from exc
+    return Response(content=data, media_type="image/png")
+
+
+# ------------------------------------------------------------------ showcase automation
+class ShowcasePrepareIn(BaseModel):
+    logo_url: str
+
+
+@api.post("/admin/orders/{order_id}/showcase/prepare")
+async def admin_showcase_prepare(
+    order_id: str, payload: ShowcasePrepareIn, admin=Depends(require_admin)
+) -> dict:
+    """Analyse the logo, extract accent, and list COMPATIBLE mockups.
+    Every mockup in our seed library only requires black/white/#EB211A logo
+    variants — all auto-generatable from any transparent PNG — so nothing is
+    filtered out today. The filter is kept as a hook for future formats
+    (e.g. multi-color logos that can't recolor cleanly)."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+
+    try:
+        logo_pil = _download_image(payload.logo_url)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Could not load logo: {exc}") from exc
+
+    accent = dominant_color_hex(logo_pil)
+
+    mockups = await db.mockups.find({}, {"_id": 0}).sort("category", 1).to_list(100)
+    # Simple compatibility rule: all built-ins are compatible for any RGBA logo.
+    compatible = mockups
+
+    return {
+        "order_id": order_id,
+        "logo_url": payload.logo_url,
+        "accent_color": accent,
+        "compatible_mockups": compatible,
+    }
+
+
+class ShowcaseGenerateIn(BaseModel):
+    logo_url: str
+    mockup_ids: List[str]
+    rationale_headline: Optional[str] = None
+    rationale_bullets: List[str] = Field(default_factory=list)
+    portfolio_tags: List[str] = Field(default_factory=list)
+    social_banner_url: Optional[str] = None
+
+
+@api.post("/admin/orders/{order_id}/showcase/generate")
+async def admin_showcase_generate(
+    order_id: str, payload: ShowcaseGenerateIn, admin=Depends(require_admin)
+) -> dict:
+    """Generate every mockup + auto tile for the selected set. Persists rendered
+    outputs into object storage and returns URLs. Does NOT publish yet — user
+    must call /publish afterwards."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if not payload.mockup_ids:
+        raise HTTPException(400, "Select at least one mockup")
+
+    logo_pil = _download_image(payload.logo_url)
+    accent = dominant_color_hex(logo_pil)
+
+    generated: list[dict] = []
+    mockups = await db.mockups.find({"id": {"$in": payload.mockup_ids}}).to_list(100)
+    for m in mockups:
+        try:
+            variant = recolor_logo(logo_pil, m.get("logo_hex", "#000000"))
+            if m["placement_type"] == "flat":
+                zone = tuple(m["zone"])  # type: ignore[assignment]
+                data = place_flat(m["url"], variant, zone=zone)
+            else:
+                corners = [tuple(c) for c in m["corners"]]
+                data = place_angled(m["url"], variant, corners=corners)
+            url = await _save_generated(order_id, f"mockup_{m['id']}.png", data)
+            generated.append({"kind": "mockup", "mockup_id": m["id"], "label": m["label"], "url": url})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Mockup %s failed: %s", m["id"], exc)
+
+    # Auto tiles
+    try:
+        typo = make_typography_tile(logo_pil)
+        generated.append({"kind": "typography", "url": await _save_generated(order_id, "typography.png", typo)})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("typography tile failed: %s", exc)
+    try:
+        pat = make_pattern_tile(logo_pil, logo_hex=accent, bg_hex="#1A1A1A")
+        generated.append({"kind": "pattern", "url": await _save_generated(order_id, "pattern.png", pat)})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pattern tile failed: %s", exc)
+
+    # Persist draft
+    draft = {
+        "order_id": order_id,
+        "logo_url": payload.logo_url,
+        "accent_color": accent,
+        "tiles": generated,
+        "rationale_headline": payload.rationale_headline,
+        "rationale_bullets": payload.rationale_bullets,
+        "portfolio_tags": payload.portfolio_tags,
+        "social_banner_url": payload.social_banner_url,
+        "updated_at": now_iso(),
+    }
+    await db.showcase_drafts.update_one({"order_id": order_id}, {"$set": draft}, upsert=True)
+    return draft
+
+
+class ShowcasePublishIn(BaseModel):
+    title: str
+    home_visible: bool = False
+
+
+@api.post("/admin/orders/{order_id}/showcase/publish")
+async def admin_showcase_publish(
+    order_id: str, payload: ShowcasePublishIn, admin=Depends(require_admin)
+) -> dict:
+    draft = await db.showcase_drafts.find_one({"order_id": order_id})
+    if not draft:
+        raise HTTPException(404, "No draft to publish — run /generate first")
+
+    if payload.home_visible:
+        home_count = await db.portfolio.count_documents({"home_visible": True})
+        if home_count >= 5:
+            raise HTTPException(400, "At most 5 home-visible items")
+
+    order_val = await db.portfolio.count_documents({})
+    cover = next((t["url"] for t in draft["tiles"] if t["kind"] == "mockup"), None) or draft["logo_url"]
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": payload.title.strip(),
+        "tags": draft.get("portfolio_tags", []),
+        "cover_image_url": cover,
+        "description": draft.get("rationale_headline"),
+        "accent_color": draft.get("accent_color"),
+        "tiles": draft.get("tiles", []),
+        "rationale_headline": draft.get("rationale_headline"),
+        "rationale_bullets": draft.get("rationale_bullets", []),
+        "social_banner_url": draft.get("social_banner_url"),
+        "home_visible": bool(payload.home_visible),
+        "published": True,
+        "source_order_id": order_id,
+        "order": order_val,
+        "created_at": now_iso(),
+    }
+    await db.portfolio.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+# ------------------------------------------------------------------ helper: download logo for image_service
+def _download_image(url: str) -> "Image.Image":  # noqa: F821
+    resp = requests.get(url, timeout=30)
+    resp.raise_for_status()
+    return Image.open(_io.BytesIO(resp.content)).convert("RGBA")
+
+
+async def _save_generated(order_id: str, name: str, data: bytes) -> str:
+    file_id = str(uuid.uuid4())
+    path = f"{APP_NAME}/showcase/{order_id}/{file_id}_{name}"
+    put_object(path, data, "image/png")
+    await db.files.insert_one(
+        {
+            "id": file_id,
+            "storage_path": path,
+            "original_filename": name,
+            "content_type": "image/png",
+            "size": len(data),
+            "kind": "showcase",
+            "created_at": now_iso(),
+            "is_deleted": False,
+        }
+    )
+    return f"/api/files/{file_id}"
+
+
+# ------------------------------------------------------------------ email trigger wiring on existing flows
+# Extend accept / decline / status endpoints to fire emails without duplicating
+# their logic — done by monkey-patching after-hook via wrappers below.
 
 
 # ------------------------------------------------------------------ mount

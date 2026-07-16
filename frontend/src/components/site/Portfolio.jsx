@@ -1,23 +1,25 @@
 import { useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 import { PORTFOLIO_PLACEHOLDERS, PORTFOLIO_TAG_ORDER } from "@/lib/brand";
 import { publicApi } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
+import { ArrowRight } from "lucide-react";
 
 export default function Portfolio() {
   const [activeTag, setActiveTag] = useState("All");
 
   const { data: liveItems = [] } = useQuery({
-    queryKey: ["portfolio", activeTag],
-    queryFn: () => publicApi.getPortfolio(activeTag),
+    queryKey: ["portfolio-home"],
+    queryFn: publicApi.getPortfolioHome,
   });
 
-  // Use live items when available; otherwise fall back to placeholders so the
-  // page never looks empty on a fresh install.
   const items = useMemo(() => {
-    if (liveItems && liveItems.length) return liveItems;
-    return PORTFOLIO_PLACEHOLDERS.filter(
-      (p) => activeTag === "All" || p.tags.includes(activeTag)
-    );
+    const pool = liveItems.length ? liveItems : PORTFOLIO_PLACEHOLDERS;
+    const filtered =
+      activeTag === "All"
+        ? pool
+        : pool.filter((p) => (p.tags || []).includes(activeTag));
+    return filtered.slice(0, 5);
   }, [liveItems, activeTag]);
 
   return (
@@ -42,10 +44,7 @@ export default function Portfolio() {
             </p>
           </div>
 
-          <div
-            data-testid="portfolio-filter-tabs"
-            className="flex flex-wrap gap-2"
-          >
+          <div data-testid="portfolio-filter-tabs" className="flex flex-wrap gap-2">
             {PORTFOLIO_TAG_ORDER.map((tag) => (
               <button
                 key={tag}
@@ -76,14 +75,22 @@ export default function Portfolio() {
             <PortfolioTile key={item.id} item={item} index={i} />
           ))}
         </div>
+
+        <div className="mt-10 text-center">
+          <Link
+            to="/work"
+            data-testid="portfolio-view-more"
+            className="inline-flex items-center gap-2 text-sm font-semibold text-[#8A8588] hover:text-[#FF6B35] transition-colors"
+          >
+            View more work <ArrowRight size={16} />
+          </Link>
+        </div>
       </div>
     </section>
   );
 }
 
 function PortfolioTile({ item, index }) {
-  // For live items (from API), we don't have bento span metadata, so pick a
-  // rotating pattern; for placeholders we honor the pre-set span/height.
   const defaultSpans = [
     "col-span-12 md:col-span-8",
     "col-span-12 md:col-span-4",
@@ -98,15 +105,15 @@ function PortfolioTile({ item, index }) {
   const tags = item.tags || [];
 
   return (
-    <a
-      href="#work"
+    <Link
+      to={`/work?item=${item.id}`}
       data-testid={`portfolio-item-${item.id}`}
       className={`group relative overflow-hidden rounded-[24px] border border-[rgba(26,26,26,0.08)] ${span} ${height} transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-1 hover:shadow-[0_24px_48px_-16px_rgba(26,26,26,0.18)]`}
       style={{ backgroundColor: bg }}
     >
       {cover && (
         <img
-          src={cover}
+          src={cover.startsWith("/api") ? `${process.env.REACT_APP_BACKEND_URL}${cover}` : cover}
           alt={item.title}
           className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
           draggable={false}
@@ -127,6 +134,6 @@ function PortfolioTile({ item, index }) {
           </span>
         </div>
       </div>
-    </a>
+    </Link>
   );
 }

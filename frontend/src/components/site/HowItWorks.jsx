@@ -27,16 +27,17 @@ export default function HowItWorks() {
       id="process"
       data-testid="process-section"
       className="reveal-on-scroll bg-[#F7F5F2] py-20 md:py-32"
+      style={{ "--section-accent": "#43FD6B" }}
     >
       <div className="mx-auto max-w-7xl px-6 md:px-10">
         <div className="grid grid-cols-1 gap-10 lg:grid-cols-12">
           <div className="lg:col-span-4">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#FF6B35]">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
               How it works
             </p>
             <h2 className="mt-3 text-4xl font-bold tracking-[-0.03em] md:text-5xl">
               Four steps.{" "}
-              <span className="accent-italic text-[#FF6B35]">No mystery.</span>
+              <span className="accent-italic section-accent-text">No mystery.</span>
             </h2>
             <p className="mt-4 text-[#1A1A1A]/70">
               I like keeping this simple. Here's exactly what happens from the

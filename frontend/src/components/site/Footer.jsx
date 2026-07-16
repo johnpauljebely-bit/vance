@@ -8,13 +8,13 @@ export default function Footer() {
       data-testid="site-footer"
       className="relative overflow-hidden bg-[#1A1A1A] text-white"
     >
-      {/* Decorative mascot in the corner — smaller than hero, per doc */}
+      {/* Decorative mascot in the corner — sized to feel intentional, fully visible */}
       <img
         src={ASSETS.mascot}
         alt=""
         aria-hidden
         data-testid="footer-mascot"
-        className="pointer-events-none absolute -bottom-14 -right-10 md:-right-4 w-64 md:w-80 opacity-95 rotate-[8deg]"
+        className="pointer-events-none absolute bottom-6 right-6 md:bottom-10 md:right-10 w-40 md:w-56 lg:w-60 opacity-95 rotate-[-4deg] drop-shadow-2xl"
         draggable={false}
       />
       <div className="pointer-events-none absolute -top-24 -left-24 h-72 w-72 rounded-full bg-[#FF6B35]/15 blur-3xl" />

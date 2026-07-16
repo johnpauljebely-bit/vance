@@ -1,0 +1,35 @@
+{
+  "summary": "Iteration 3+4 (email service, client portal, per-order messages, section-accent colors, Banner Design in services, Portfolio CRUD + /work archive, admin Automation tab with watermark & showcase, mockup seed, portfolio manager in settings) tested end-to-end. Backend: 44/44 pytest cases pass (25 regression from iteration 2 + 19 new). Frontend: homepage section accents verified (Hero orange, Services #0201FC blue, Process #43FD6B green, FAQ #FE0183 pink, Footer orange), Banner Design present in pricing AND commission form dropdown, Social Media Kit fully removed, portfolio-view-more -> /work, /work modal open/close, portal login DEVTEST + magic-link empty-email flow, /portal 'No orders yet' empty state + logout, admin sidebar has 10 items (01-10) including 06 Automation between Task Board and Calendar, Automation page renders opacity/size sliders + save + showcase order-select/logo-url/generate + 5 mockups pickable, Admin Messages renders search + 14 orders + thread + input+send round-trip (admin bubble right/dark), Settings has portfolio manager create form with title/tags/file/create button.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/backend/tests/test_iteration3.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1328 lines — well past the 700-line guideline. Split into routers/admin.py, routers/portal.py, routers/portfolio.py, routers/automation.py, routers/messages.py to stay maintainable.",
+    "admin_list_messages does find() then update_many() — the returned response reflects pre-read state (client tests must GET twice to observe read_by_admin=True). Consider marking read BEFORE returning or noting in API docs; alternatively perform an in-memory mark on the returned docs to make read-tracking immediately reflected in the first GET.",
+    "admin_showcase_generate loops over mockups sequentially; each _download_image + PIL/OpenCV op is CPU/IO-bound and blocks the event loop. Under load consider running via `asyncio.to_thread` or a background job.",
+    "_download_image and _save_generated are declared AFTER they are referenced in admin_showcase_generate — works in Python only because both are looked up at call time, but ordering is fragile. Move helpers above their first use.",
+    "recolor_logo re-renders logo per mockup; for repeated hex targets across mockups the intermediate PIL image can be cached.",
+    "PortalLoginIn returns 200 with {sent:true} even when SMTP fails silently and only console-log is emitted — good UX but there is no observability signal for the operator. Consider a boolean 'delivered'/'log_only' hint on non-prod builds.",
+    "Watermark preview endpoint always fetches the watermark URL by hard-coded string; duplicated between GET /admin/automation and /admin/watermark/preview. Extract to a constant.",
+    "In admin_update_portfolio the check `if updates.get('home_visible') and not existing.get('home_visible')` correctly guards toggling on, but does not guard the case where a caller PATCHes multiple items to home_visible=True concurrently — could momentarily exceed the 5-cap. Add a Mongo transaction or a settings-based counter for strict safety.",
+    "Client portal magic-link tokens are stored plaintext in db.magic_links; consider storing SHA-256 hash of the token + one-shot lookup by hash to prevent DB dump replay attacks.",
+    "OrderId field for portal thread endpoints does not verify that the order actually exists before the 404 — the ownership check on client_email doubles as existence check which is fine, but on the admin side an unknown order_id silently returns an empty [] rather than 404. Consider validating order_id on the admin side too."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration3.py"],
+  "success_rate": {"backend": "100% (44/44)", "frontend": "100% (all listed testids present and interactive)"},
+  "test_credentials": "admin@vance.design / changeme-in-production; Client DEVTEST password (any @-valid email)",
+  "seed_data_creation": "Created TEST_MagicLink, TEST_ClientPortal, TEST_Messages, TEST_EmailTrigger, TEST_Showcase, TEST_AcceptFlow request docs (auto-created corresponding orders via /admin/requests/{id}/accept). All TEST_HV_* portfolio items created during CRUD test were cleaned up in teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iteration 3+4 backend is fully covered. New pytest file at /app/backend/tests/test_iteration3.py — reuse for regression. Portfolio home_visible cap (5) is enforced. Watermark preview returns valid PNG bytes. Showcase generate produces at least 1 mockup tile + typography + pattern for the sample Vance logo URL. Email service logs to console (SMTP unverified in sandbox — expected). Admin sidebar has 10 items; Automation is item 06 between Task Board and Calendar. Portfolio manager mounted inside AdminSettings. All frontend testids from the spec are present and wired.",
+  "rca of the issue": "N/A — no defects found. One initially failing test (admin messages read-tracking) was a test bug: admin_list_messages marks read AFTER returning the response, so the first GET reports pre-read state; corrected the test to fetch twice, which matches implementation intent."
+}

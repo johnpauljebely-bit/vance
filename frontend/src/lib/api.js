@@ -25,6 +25,8 @@ export const publicApi = {
     client
       .get("/portfolio", { params: tag && tag !== "All" ? { tag } : {} })
       .then((r) => r.data),
+  getPortfolioHome: () => client.get("/portfolio/home").then((r) => r.data),
+  getPortfolioItem: (id) => client.get(`/portfolio/${id}`).then((r) => r.data),
   submitRequest: (payload) => client.post("/requests", payload).then((r) => r.data),
   uploadReference: (file) => {
     const form = new FormData();
@@ -71,7 +73,67 @@ export const adminApi = {
     client.patch("/admin/settings", patch).then((r) => r.data),
 };
 
-// Canonical order status list — matches backend
+// Client portal + admin messages/portfolio/automation clients — separate token key
+const clientClient = axios.create({ baseURL: API_BASE, timeout: 30000 });
+clientClient.interceptors.request.use((cfg) => {
+  const t = localStorage.getItem("vance_client_token");
+  if (t && cfg.headers) cfg.headers.Authorization = `Bearer ${t}`;
+  return cfg;
+});
+
+export const portalApi = {
+  login: (email, password) =>
+    client.post("/portal/login", { email, password: password || null }).then((r) => r.data),
+  verify: (token) => client.post("/portal/verify", { token }).then((r) => r.data),
+  me: () => clientClient.get("/portal/me").then((r) => r.data),
+  listOrders: () => clientClient.get("/portal/orders").then((r) => r.data),
+  getOrder: (id) => clientClient.get(`/portal/orders/${id}`).then((r) => r.data),
+  listMessages: (id) => clientClient.get(`/portal/orders/${id}/messages`).then((r) => r.data),
+  sendMessage: (id, body, attachments = []) =>
+    clientClient
+      .post(`/portal/orders/${id}/messages`, { body, attachment_file_ids: attachments })
+      .then((r) => r.data),
+  submitReview: (id, quote, rating) =>
+    clientClient
+      .post(`/portal/orders/${id}/review`, { quote, rating })
+      .then((r) => r.data),
+};
+
+export const adminMsgApi = {
+  list: (orderId) =>
+    client.get(`/admin/orders/${orderId}/messages`).then((r) => r.data),
+  send: (orderId, body, attachments = []) =>
+    client
+      .post(`/admin/orders/${orderId}/messages`, { body, attachment_file_ids: attachments })
+      .then((r) => r.data),
+};
+
+export const portfolioApi = {
+  list: () => client.get("/admin/portfolio").then((r) => r.data),
+  create: (payload) => client.post("/admin/portfolio", payload).then((r) => r.data),
+  update: (id, patch) => client.patch(`/admin/portfolio/${id}`, patch).then((r) => r.data),
+  remove: (id) => client.delete(`/admin/portfolio/${id}`).then((r) => r.data),
+};
+
+export const automationApi = {
+  get: () => client.get("/admin/automation").then((r) => r.data),
+  update: (patch) => client.patch("/admin/automation", patch).then((r) => r.data),
+  listMockups: () => client.get("/admin/mockups").then((r) => r.data),
+  showcasePrepare: (orderId, logoUrl) =>
+    client
+      .post(`/admin/orders/${orderId}/showcase/prepare`, { logo_url: logoUrl })
+      .then((r) => r.data),
+  showcaseGenerate: (orderId, payload) =>
+    client
+      .post(`/admin/orders/${orderId}/showcase/generate`, payload)
+      .then((r) => r.data),
+  showcasePublish: (orderId, payload) =>
+    client
+      .post(`/admin/orders/${orderId}/showcase/publish`, payload)
+      .then((r) => r.data),
+  watermarkPreviewUrl: (logoUrl) =>
+    `${API_BASE}/admin/watermark/preview?logo_url=${encodeURIComponent(logoUrl)}`,
+};
 export const ORDER_STATUSES = [
   "Accepted – Awaiting Deposit",
   "Awaiting Manual Payment Confirmation",

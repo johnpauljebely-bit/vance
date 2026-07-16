@@ -45,13 +45,13 @@ const SERVICES = [
     dark: true,
   },
   {
-    title: "Brand Identity Package",
-    copy: "Logo + color palette + typography system + basic brand guide.",
+    title: "Banner Design",
+    copy: "Banners, cover art, and social headers that lock into your visual language.",
     span: "md:col-span-5",
   },
   {
-    title: "Social Media Kit",
-    copy: "Profile picture, banner, and templates sized for your platform.",
+    title: "Brand Identity",
+    copy: "Logo + palette + typography system + basic brand guide.",
     span: "md:col-span-5",
   },
   {
@@ -70,16 +70,17 @@ export default function Services() {
       id="services"
       data-testid="services-section"
       className="reveal-on-scroll bg-white py-20 md:py-32"
+      style={{ "--section-accent": "#0201FC" }}
     >
       <div className="mx-auto max-w-7xl px-6 md:px-10">
         <div className="grid grid-cols-1 items-end gap-6 md:grid-cols-12">
           <div className="md:col-span-8">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#FF6B35]">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
               What you get
             </p>
             <h2 className="mt-3 text-4xl font-bold tracking-[-0.03em] md:text-5xl lg:text-6xl">
               Small studio,{" "}
-              <span className="accent-italic text-[#FF6B35]">big details.</span>
+              <span className="accent-italic section-accent-text">big details.</span>
             </h2>
           </div>
           <p className="md:col-span-4 text-sm text-[#1A1A1A]/70 leading-relaxed md:pb-3">
@@ -107,7 +108,7 @@ export default function Services() {
                 draggable={false}
               />
               <div>
-                <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#FF6B35]">
+                <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
                   Feature 01
                 </p>
                 <h3 className="mt-2 text-3xl md:text-4xl font-bold tracking-[-0.03em]">
@@ -132,12 +133,12 @@ export default function Services() {
         <div className="mt-24 md:mt-32">
           <div className="grid grid-cols-1 items-end gap-6 md:grid-cols-12">
             <div className="md:col-span-7">
-              <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#FF6B35]">
+              <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
                 Services & Pricing
               </p>
               <h3 className="mt-3 text-3xl font-bold tracking-[-0.03em] md:text-5xl">
                 Quote-based.{" "}
-                <span className="accent-italic text-[#FF6B35]">No hidden fees.</span>
+                <span className="accent-italic section-accent-text">No hidden fees.</span>
               </h3>
             </div>
             <p className="md:col-span-5 text-sm text-[#1A1A1A]/70 md:pb-2">
@@ -202,7 +203,7 @@ function ServiceCard({ service, index }) {
         <div className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full bg-[#FF6B35]/25 blur-3xl" />
         <div className="relative flex items-start justify-between gap-6">
           <div className="flex-1">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#FF6B35]">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
               Most requested
             </p>
             <h4 className="mt-2 text-2xl md:text-3xl font-bold tracking-[-0.02em]">
@@ -249,7 +250,7 @@ function ServiceCard({ service, index }) {
       data-testid={`service-${service.title.replace(/\s+/g, "-").toLowerCase()}`}
       className={`${service.span || "md:col-span-6"} col-span-12 group flex items-start gap-4 rounded-[24px] border border-[rgba(26,26,26,0.1)] bg-white p-8 transition-colors hover:border-[#1A1A1A]`}
     >
-      <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-full bg-[#FF6B35]/12 text-xs font-bold text-[#FF6B35]">
+      <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-full bg-[#FF6B35]/12 text-xs font-bold section-accent-text">
         {String(index).padStart(2, "0")}
       </div>
       <div className="flex-1">

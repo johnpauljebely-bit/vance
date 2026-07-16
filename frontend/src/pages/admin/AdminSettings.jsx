@@ -3,6 +3,23 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminApi } from "@/lib/api";
 import { toast } from "sonner";
 import { X, Plus } from "lucide-react";
+import AdminPortfolioManager from "@/pages/admin/AdminPortfolioManager";
+
+function PortfolioManagerSection() {
+  return (
+    <div>
+      <div className="mb-3">
+        <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+          Portfolio management
+        </p>
+        <p className="text-xs text-[#8A8588] mt-0.5">
+          Upload unlimited items — only the first 5 marked "on home" appear on the homepage grid. The rest live on the /work archive page.
+        </p>
+      </div>
+      <AdminPortfolioManager />
+    </div>
+  );
+}
 
 export default function AdminSettings() {
   const qc = useQueryClient();
@@ -152,6 +169,8 @@ export default function AdminSettings() {
           SMTP, watermark opacity/size, and pricing/service list configuration
           ship in Phase 3.5 once your Gmail App Password is available.
         </div>
+
+        <PortfolioManagerSection />
 
         <div className="flex items-center gap-3">
           <button

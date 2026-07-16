@@ -14,6 +14,7 @@ import {
   Package,
   MessagesSquare,
   KanbanSquare,
+  Wand2,
   Calendar,
   FilesIcon,
   BarChart3,
@@ -30,10 +31,11 @@ const NAV = [
   { to: "/admin/orders", label: "Orders", icon: Package, n: "03" },
   { to: "/admin/messages", label: "Messages", icon: MessagesSquare, n: "04" },
   { to: "/admin/taskboard", label: "Task Board", icon: KanbanSquare, n: "05" },
-  { to: "/admin/calendar", label: "Calendar", icon: Calendar, n: "06" },
-  { to: "/admin/templates", label: "Templates", icon: FilesIcon, n: "07" },
-  { to: "/admin/analytics", label: "Analytics", icon: BarChart3, n: "08" },
-  { to: "/admin/settings", label: "Settings", icon: Settings, n: "09" },
+  { to: "/admin/automation", label: "Automation", icon: Wand2, n: "06" },
+  { to: "/admin/calendar", label: "Calendar", icon: Calendar, n: "07" },
+  { to: "/admin/templates", label: "Templates", icon: FilesIcon, n: "08" },
+  { to: "/admin/analytics", label: "Analytics", icon: BarChart3, n: "09" },
+  { to: "/admin/settings", label: "Settings", icon: Settings, n: "10" },
 ];
 
 export default function AdminLayout() {

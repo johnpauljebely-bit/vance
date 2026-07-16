@@ -68,8 +68,20 @@
     font-family: "Lora", serif;
     font-style: italic;
     font-weight: 500;
-    color: #FF6B35;
+    color: var(--section-accent, #FF6B35);
     letter-spacing: -0.01em;
+  }
+
+  .section-accent-text {
+    color: var(--section-accent, #FF6B35);
+  }
+
+  .section-accent-bg {
+    background-color: var(--section-accent, #FF6B35);
+  }
+
+  .section-accent-border {
+    border-color: var(--section-accent, #FF6B35);
   }
 
   .btn-primary {

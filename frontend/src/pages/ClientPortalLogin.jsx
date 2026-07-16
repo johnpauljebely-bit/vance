@@ -1,20 +1,53 @@
-import { useState } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { portalApi } from "@/lib/api";
 import { ASSETS } from "@/lib/brand";
 import { toast } from "sonner";
-import { ArrowLeft, Mail, Send } from "lucide-react";
+import { Loader2, ArrowLeft, Mail, Send } from "lucide-react";
 
-// Phase 1+2 scaffold. Full magic-link auth ships in Phase 6.
 export default function ClientPortalLogin() {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const [searchParams] = useSearchParams();
+  const magicToken = searchParams.get("token");
+  const navigate = useNavigate();
 
-  const onSubmit = (e) => {
+  useEffect(() => {
+    if (!magicToken) return;
+    portalApi
+      .verify(magicToken)
+      .then((data) => {
+        localStorage.setItem("vance_client_token", data.access_token);
+        toast.success("Signed in via magic link.");
+        navigate("/portal");
+      })
+      .catch((err) => {
+        toast.error(err?.response?.data?.detail || "Link invalid or expired");
+      });
+  }, [magicToken, navigate]);
+
+  const onSubmit = async (e) => {
     e.preventDefault();
     if (!email.includes("@")) return;
-    // Simulate the flow — in Phase 6, this will call POST /api/portal/request-link.
-    toast.info("Client Portal launches in a future phase — the link flow will land here.");
-    setSent(true);
+    setSending(true);
+    try {
+      const res = await portalApi.login(email, password || null);
+      if (res.mode === "password" && res.access_token) {
+        localStorage.setItem("vance_client_token", res.access_token);
+        toast.success("Signed in.");
+        navigate("/portal");
+      } else {
+        setSent(true);
+        toast.success("Magic link sent — check your inbox.");
+      }
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Login failed");
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -32,12 +65,7 @@ export default function ClientPortalLogin() {
 
       <div className="w-full max-w-md">
         <div className="mb-8 flex flex-col items-center">
-          <img
-            src={ASSETS.logoBlack}
-            alt="Vance"
-            className="h-12 w-12"
-            draggable={false}
-          />
+          <img src={ASSETS.logoBlack} alt="Vance" className="h-12 w-12" />
           <p className="mt-5 text-xs font-bold uppercase tracking-[0.3em] text-[#FF6B35]">
             Client Portal
           </p>
@@ -46,8 +74,8 @@ export default function ClientPortalLogin() {
             <span className="accent-italic text-[#FF6B35]">login link.</span>
           </h1>
           <p className="mt-3 text-center text-sm text-[#1A1A1A]/70">
-            No password. Enter the email you submitted your commission with and
-            we'll send you a one-time login link.
+            Enter the email you used for your commission and we'll send you a
+            one-time link. Or, during dev, use the password below.
           </p>
         </div>
 
@@ -64,8 +92,7 @@ export default function ClientPortalLogin() {
               </div>
               <p className="mt-4 font-bold">Check your inbox.</p>
               <p className="mt-1 text-sm text-[#8A8588]">
-                (Magic-link email delivery ships in Phase 6 — this is the
-                placeholder for that flow.)
+                Your link expires in 30 minutes. If you don't see it, check spam.
               </p>
               <button
                 type="button"
@@ -90,16 +117,46 @@ export default function ClientPortalLogin() {
                 placeholder="you@example.com"
                 required
               />
+
+              {showPassword ? (
+                <>
+                  <label className="mt-4 block text-xs font-bold uppercase tracking-widest text-[#1A1A1A]/80">
+                    Dev password
+                  </label>
+                  <input
+                    type="password"
+                    data-testid="portal-password-input"
+                    className="input-base mt-1.5"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="DEVTEST"
+                  />
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(true)}
+                  data-testid="portal-show-password-toggle"
+                  className="mt-3 text-xs text-[#8A8588] underline hover:text-[#1A1A1A]"
+                >
+                  Use dev password instead
+                </button>
+              )}
+
               <button
                 type="submit"
-                disabled={!email.includes("@")}
+                disabled={!email.includes("@") || sending}
                 data-testid="portal-login-submit"
                 className="btn-primary mt-5 w-full"
               >
-                <Send size={16} /> Send my login link
+                {sending ? (
+                  <><Loader2 size={16} className="animate-spin" /> Sending…</>
+                ) : (
+                  <><Send size={16} /> {password ? "Sign in with password" : "Send login link"}</>
+                )}
               </button>
               <p className="mt-4 text-xs text-[#8A8588]">
-                Links expire 15 minutes after sending. Sessions last 30 days.
+                Links expire 15–30 minutes after sending. Sessions last 30 days.
               </p>
             </>
           )}

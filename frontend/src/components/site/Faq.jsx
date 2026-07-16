@@ -13,16 +13,17 @@ export default function Faq() {
       id="faq"
       data-testid="faq-section"
       className="reveal-on-scroll bg-[#F7F5F2] py-20 md:py-32"
+      style={{ "--section-accent": "#FE0183" }}
     >
       <div className="mx-auto max-w-7xl px-6 md:px-10">
         <div className="grid grid-cols-1 gap-12 lg:grid-cols-12">
           <div className="lg:col-span-4">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#FF6B35]">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
               Common questions
             </p>
             <h2 className="mt-3 text-4xl font-bold tracking-[-0.03em] md:text-5xl lg:text-6xl">
               Answered{" "}
-              <span className="accent-italic text-[#FF6B35]">honestly.</span>
+              <span className="accent-italic section-accent-text">honestly.</span>
             </h2>
             <p className="mt-4 text-[#1A1A1A]/70 leading-relaxed">
               If your question isn't here, drop it in the brief on the request
@@ -49,7 +50,7 @@ export default function Faq() {
                       type="button"
                       data-testid={`faq-trigger-${i}`}
                       onClick={() => setOpenIdx(isOpen ? -1 : i)}
-                      className="flex w-full items-start justify-between gap-6 py-6 text-left transition-colors hover:text-[#FF6B35]"
+                      className="flex w-full items-start justify-between gap-6 py-6 text-left transition-colors hover:section-accent-text"
                       aria-expanded={isOpen}
                     >
                       <span className="flex items-start gap-4">
@@ -63,7 +64,7 @@ export default function Faq() {
                       <span
                         className={`shrink-0 flex h-9 w-9 items-center justify-center rounded-full border transition-colors ${
                           isOpen
-                            ? "border-[#FF6B35] bg-[#FF6B35] text-white"
+                            ? "section-accent-border section-accent-bg text-white"
                             : "border-[#1A1A1A]/25 text-[#1A1A1A]"
                         }`}
                       >
