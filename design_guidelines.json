@@ -1,0 +1,177 @@
+{
+  "project_name": "VANCE",
+  "theme": "light",
+  "style_inspiration": "DesignJoy-inspired layout, clean, conversion-focused, generous whitespace, warm minimalist.",
+  "typography": {
+    "font_families": {
+      "primary": "'Poppins', sans-serif",
+      "accent": "'Lora', serif"
+    },
+    "usage": {
+      "headlines": {
+        "family": "Poppins",
+        "weight": "700 (Bold)",
+        "letter_spacing": "normal"
+      },
+      "body": {
+        "family": "Poppins",
+        "weight": "400 (Regular)",
+        "letter_spacing": "-0.03em"
+      },
+      "ctas_and_nav": {
+        "family": "Poppins",
+        "weight": "700 (Bold)",
+        "letter_spacing": "normal"
+      },
+      "accent_phrases": {
+        "family": "Lora",
+        "weight": "400",
+        "style": "italic",
+        "description": "Used inline within Poppins headlines for emphasis, e.g., 'Hi, I\\'m *Vance*' or 'Design that actually *ships*'."
+      }
+    },
+    "scale": {
+      "h1": "text-5xl md:text-6xl+ leading-tight tracking-tight",
+      "h2": "text-3xl md:text-4xl leading-snug tracking-tight",
+      "h3": "text-xl md:text-2xl leading-snug",
+      "body": "text-base md:text-lg leading-relaxed tracking-[-0.03em]",
+      "small": "text-sm tracking-[-0.03em]"
+    }
+  },
+  "colors": {
+    "background": {
+      "main": "#F7F5F2",
+      "card": "#FFFFFF"
+    },
+    "text": {
+      "primary": "#1A1A1A",
+      "secondary": "#8A8588"
+    },
+    "brand": {
+      "primary": "#FF6B35"
+    },
+    "semantic": {
+      "new": "#3B82F6",
+      "accepted": "#22C55E",
+      "declined": "#EF4444",
+      "awaiting": "#F59E0B"
+    },
+    "borders": {
+      "subtle": "rgba(26, 26, 26, 0.08)"
+    }
+  },
+  "spacing_and_radii": {
+    "spacing_scale": {
+      "section_y": "py-20 md:py-32",
+      "container_px": "px-6 md:px-12",
+      "gap_standard": "gap-6 md:gap-8",
+      "gap_large": "gap-12 md:gap-16"
+    },
+    "border_radius": {
+      "sm": "12px",
+      "md": "24px",
+      "pill": "999px"
+    },
+    "usage": {
+      "12px": "Cards, pricing tiles, input fields, dropdown menus.",
+      "24px": "Larger feature tiles, prominent icon tile containers, bento grid blocks.",
+      "999px": "Buttons (primary and secondary), status tags/pills."
+    }
+  },
+  "motion": {
+    "philosophy": "Intentional and restrained. Respects prefers-reduced-motion. No auto-playing loops, no elastic bounce.",
+    "page_load": {
+      "duration": "150ms-200ms",
+      "effect": "Fade in"
+    },
+    "scroll_reveal": {
+      "effect": "Fade up (opacity 0 to 1, translate-y 20px to 0)",
+      "duration": "500ms",
+      "trigger": "Once per section"
+    },
+    "hover_states": {
+      "button": "Scale 1.02x max, ease-out 150ms, subtle darken (brightness 95%).",
+      "card": "Lift/Translate-Y -2px to -4px, duration 200ms, subtle shadow increase."
+    }
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#FF6B35] text-white rounded-full font-bold hover:brightness-95 transition-all duration-150 ease-out hover:scale-[1.02]",
+      "secondary": "bg-transparent border-2 border-[#FF6B35] text-[#FF6B35] rounded-full font-bold hover:bg-[#FF6B35]/10 transition-all duration-150 ease-out hover:scale-[1.02]",
+      "nav": "text-[#1A1A1A] font-bold hover:text-[#FF6B35] transition-colors"
+    },
+    "cards": {
+      "base": "bg-white rounded-[12px] border border-[#1A1A1A]/10 shadow-sm",
+      "feature_tile": "bg-white rounded-[24px] border border-[#1A1A1A]/10 shadow-sm p-8"
+    },
+    "inputs": {
+      "base": "bg-white border border-[#1A1A1A]/20 rounded-[12px] px-4 py-3 text-[#1A1A1A] focus:outline-none focus:border-[#FF6B35] focus:ring-1 focus:ring-[#FF6B35] transition-all tracking-[-0.03em]"
+    },
+    "status_pills": {
+      "base": "inline-flex items-center px-3 py-1 rounded-full text-sm font-bold text-white",
+      "variants": {
+        "new": "bg-[#3B82F6]",
+        "accepted": "bg-[#22C55E]",
+        "declined": "bg-[#EF4444]",
+        "awaiting": "bg-[#F59E0B]"
+      }
+    },
+    "quotes": {
+      "style": "border-2 border-dashed border-[#1A1A1A]/20 p-6 rounded-[12px] italic text-[#8A8588]"
+    }
+  },
+  "layouts": {
+    "navigation": "Sticky top, blurred glassmorphism background (e.g., bg-[#F7F5F2]/80 backdrop-blur-md). Includes Logo left, Staff/Client portal buttons right.",
+    "hero": "Centered heavy layout. 'Open Slots' live indicator pill at top. Massive headline mixing Poppins Bold and Lora Italic. Mascot PNG clustered near or interacting with CTA. Generous bottom padding.",
+    "portfolio_grid": "Bento-style CSS grid (e.g., grid-cols-1 md:grid-cols-12). Mix of col-span-4, col-span-8 to create varying tile sizes. Filter tabs positioned above grid.",
+    "services_pricing": "Grid of cards. Each card uses one of the 5 gradient icon tiles (lock, lightning, star, grid, board). White card background, icon top-left, punchy bold headline, plain sentence description.",
+    "how_it_works": "Vertical timeline or 4-step horizontal track. Bold numbering.",
+    "faq": "Clean accordion (Shadcn customized). Flat white blocks, 12px radius, accent-colored chevron on expand.",
+    "commission_form": "Max-width container (max-w-2xl). Stacked inputs. Image upload dashed zone. Primary CTA at bottom.",
+    "footer": "Simple, uncluttered. Copyright, links (Terms, Privacy, Discord, Robux disclaimer). 'Last updated' dynamic date on legal pages.",
+    "admin_login": "Centered card on #F7F5F2 background. 24px radius card, minimalistic.",
+    "not_found_404": "Playful, on-brand. Mascot presence. Bold '404' and friendly redirect to home."
+  },
+  "image_assets": {
+    "system": {
+      "mascot": "smiley-cluster.png (Assume uploaded/imported from local assets)",
+      "watermark": "white-logo-drop-shadow.png (Assume uploaded/imported)",
+      "gradient_icons": "lock.png, lightning.png, star.png, grid.png, board.png (DO NOT BUILD IN CSS, use as image sources)"
+    },
+    "placeholders": {
+      "portfolio_business_card": "https://images.unsplash.com/photo-1623305465231-d884ce752d59?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHwxfHxidXNpbmVzcyUyMGNhcmQlMjBtb2NrdXB8ZW58MHx8fHwxNzg0MTY1NDUwfDA&ixlib=rb-4.1.0&q=85",
+      "portfolio_tote_bag": "https://images.unsplash.com/photo-1544816155-12df9643f363?crop=entropy&cs=srgb&fm=jpg&ixid=M3w8NjA1NjZ8MHwxfHNlYXJjaHwyfHx0b3RlJTIwYmFnJTIwbW9ja3VwfGVufDB8fHx8MTc4NDE2NTQ1MXww&ixlib=rb-4.1.0&q=85",
+      "portfolio_storefront": "https://images.unsplash.com/photo-1695048168808-4bbfa1efdfa7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w8NjA1MDV8MHwxfHNlYXJjaHwxfHxzdG9yZWZyb250JTIwc2lnbiUyMG1vY2t1cHxlbnwwfHx8fDE3ODQxNjU0NTF8MA&ixlib=rb-4.1.0&q=85",
+      "portfolio_identity": "https://images.unsplash.com/photo-1781444456332-f65b7080a179?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODF8MHwxfHNlYXJjaHwxfHxicmFuZCUyMGlkZW50aXR5JTIwYm9hcmQlMjBtb2NrdXB8ZW58MHx8fHwxNzg0MTY1NDU4fDA&ixlib=rb-4.1.0&q=85",
+      "portfolio_typography": "https://images.unsplash.com/photo-1520764588094-8fc067746a8e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzR8MHwxfHNlYXJjaHwzfHx0eXBvZ3JhcGh5JTIwc3BlY2ltZW4lMjBtb2NrdXB8ZW58MHx8fHwxNzg0MTY1NDU4fDA&ixlib=rb-4.1.0&q=85"
+    }
+  },
+  "instructions_to_main_agent": [
+    "Ensure the fonts Poppins and Lora are loaded via Google Fonts or standard imports in index.css.",
+    "DO NOT use generic sans-serif for main titles, strictly use Poppins Bold.",
+    "For the Lora italic emphasis, explicitly wrap the word in a <span> with the Lora font family and italic styles.",
+    "The 5 gradient icon tiles (lock, lightning, star, grid, board) must be implemented via standard <img> tags representing the uploaded assets. Do not recreate these with CSS gradients. All other gradients are forbidden.",
+    "Use solid #FF6B35 for all primary CTAs.",
+    "Apply `data-testid` to all interactive buttons, tabs, accordions, and form elements. Example: `data-testid=\"submit-commission-btn\"`.",
+    "Form logic must use standard JS/React conventions (not .tsx).",
+    "Bento grid for the portfolio should break asymmetry. Example: A mix of wide (col-span-8) and square (col-span-4) tiles on desktop.",
+    "Header nav must have a solid or heavily blurred background to prevent text collision when scrolling. DO NOT use completely transparent headers.",
+    "Make sure hover states match exactly what is defined: slight scale up (1.02) and subtle shadow without aggressive bouncy transitions."
+  ],
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "You tend to converge toward generic, 'on distribution' outputs. In frontend design, this creates what users call the 'AI slop' aesthetic. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Don't make generic centered layouts (unless explicitly requested like Hero), simplistic gradients, and uniform styling.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur) where appropriate, like the sticky navbar.",
+    "You MUST NOT apply universal transition. Eg: `transition: all`. This results in breaking transforms. Always add transitions for specific interactive elements like button, input excluding transforms.",
+    "You MUST NOT center align the app container globally, ie do not add `.App { text-align: center; }` in the css file. This disrupts the human natural reading flow of text.",
+    "NEVER use AI assistant Emoji characters like 🤖🧠💭💡🔮🎯 etc for icons.",
+    "Every interaction needs micro-animations - hover states, transitions, parallax effects, and entrance animations. Static = dead.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "Subtle grain textures, noise overlays, custom cursors, selection states, and loading animations: separates good from extraordinary.",
+    "Main agent relies on these image URLs. Missing categories = main agent will use placeholder text which is FORBIDDEN.",
+    "Prioritize using pre-existing components from src/components/ui when applicable.",
+    "Use `sonner` for toasts. Sonner components are located in `/app/src/components/ui/sonner.js` (standard JS path)."
+  ]
+}
