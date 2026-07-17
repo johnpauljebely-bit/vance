@@ -13,10 +13,12 @@ Provides:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import uuid
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Annotated, List, Optional
@@ -25,6 +27,13 @@ import jwt
 import requests
 from bson import ObjectId
 from dotenv import load_dotenv
+
+# Must run before any local-module import (email_service, image_service) —
+# those modules read SMTP/API credentials from os.environ at import time, so
+# loading .env after importing them silently bakes in empty defaults.
+ROOT_DIR = Path(__file__).parent
+load_dotenv(ROOT_DIR / ".env")
+
 from fastapi import (
     APIRouter,
     Depends,
@@ -33,6 +42,7 @@ from fastapi import (
     HTTPException,
     Header,
     Query,
+    Request,
     Response,
     UploadFile,
     status,
@@ -53,12 +63,10 @@ from email_service import (
     email_review_request,
 )
 from image_service import (
-    apply_watermark,
+    apply_corner_watermark,
+    apply_watermark_layers,
     dominant_color_hex,
-    make_pattern_tile,
-    make_typography_tile,
-    place_angled,
-    place_flat,
+    generate_logo_kit,
     recolor_logo,
 )
 from PIL import Image
@@ -66,9 +74,6 @@ import io as _io
 import secrets
 
 # ------------------------------------------------------------------ env / config
-ROOT_DIR = Path(__file__).parent
-load_dotenv(ROOT_DIR / ".env")
-
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 APP_NAME = os.environ.get("APP_NAME", "vance")
@@ -79,6 +84,13 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "hello@vance.design")
 
 CLIENT_DEV_PASSWORD = os.environ.get("CLIENT_DEV_PASSWORD", "DEVTEST")
+
+STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
+if STRIPE_SECRET_KEY:
+    import stripe
+
+    stripe.api_key = STRIPE_SECRET_KEY
 
 STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
 EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
@@ -164,6 +176,7 @@ class PublicSettings(BaseModel):
     total_slots: int
     portfolio_tags: List[str]
     last_content_updated: str
+    robux_game_link: Optional[str] = None
 
 
 class AdminLoginIn(BaseModel):
@@ -290,63 +303,6 @@ async def on_startup() -> None:
         )
         logger.info("Seeded default settings")
 
-    # Seed mockup library
-    if await db.mockups.count_documents({}) == 0:
-        cdn2 = "https://customer-assets-lqy194kg.emergentagent.net/job_vance-wip/artifacts"
-        mockups_seed = [
-            {
-                "id": "mk-xtwitter",
-                "label": "X/Twitter profile",
-                "category": "social",
-                "url": f"{cdn2}/pbiu0vt7_Untitled%2020.png",
-                "placement_type": "flat",
-                "zone": [615, 470, 380, 380],
-                "logo_hex": "#000000",
-                "requirement": "Black logo, avatar zone",
-            },
-            {
-                "id": "mk-bizcard",
-                "label": "Business card on tiles",
-                "category": "print",
-                "url": f"{cdn2}/q70gqakf_Untitled%2020%20%281%29.png",
-                "placement_type": "flat",
-                "zone": [720, 490, 380, 220],
-                "logo_hex": "#000000",
-                "requirement": "Black logo, transparent bg",
-            },
-            {
-                "id": "mk-phoneinhand",
-                "label": "Phone in hand",
-                "category": "device",
-                "url": f"{cdn2}/ddlhgonq_hands_iphones_preview_4_5cc96b583d.png",
-                "placement_type": "flat",
-                "zone": [800, 500, 320, 320],
-                "logo_hex": "#FFFFFF",
-                "requirement": "White logo, transparent bg",
-            },
-            {
-                "id": "mk-eventpass",
-                "label": "Event pass / badge",
-                "category": "print",
-                "url": f"{cdn2}/nd180i8r_for%20apparel%20either%20black%20logo%20or%20white%20logo%20both%20transparent%20bg%20and%20make%20it%20small%20ish%20and%20center%20it%20as%20shown%203rd%20image.png",
-                "placement_type": "flat",
-                "zone": [820, 620, 260, 220],
-                "logo_hex": "#000000",
-                "requirement": "Black logo, transparent bg",
-            },
-            {
-                "id": "mk-aframe",
-                "label": "A-frame sandwich board",
-                "category": "environmental",
-                "url": f"{cdn2}/5a89v76s_for%20apparel%20either%20black%20logo%20or%20white%20logo%20both%20transparent%20bg%20and%20make%20it%20small%20ish%20and%20center%20it%20as%20shown%203rd%20image%20%281%29.png",
-                "placement_type": "angled",
-                "corners": [[460, 250], [880, 240], [870, 610], [470, 620]],
-                "logo_hex": "#000000",
-                "requirement": "Black logo, transparent bg",
-            },
-        ]
-        await db.mockups.insert_many(mockups_seed)
-        logger.info("Seeded %d mockups", len(mockups_seed))
 
 
 @app.on_event("shutdown")
@@ -371,6 +327,7 @@ async def get_public_settings() -> PublicSettings:
         total_slots=int(doc.get("total_slots", 0)),
         portfolio_tags=doc.get("portfolio_tags", []),
         last_content_updated=doc.get("last_content_updated", now_iso()),
+        robux_game_link=doc.get("robux_game_link"),
     )
 
 
@@ -555,7 +512,11 @@ async def admin_accept_request(
         "budget": req.get("budget"),
         "status": "Accepted – Awaiting Deposit",
         "payment_status": "Deposit Pending",
-        "showcase_safe": True,
+        "quoted_price": None,
+        "deposit_paid": False,
+        "final_paid": False,
+        "delivered_logo_url": None,
+        "unique_payment_code": f"VC-{uuid.uuid4().hex[:6].upper()}",
         "revision_count": 0,
         "activity": [
             {"at": now, "note": f"Accepted by {admin['sub']}", "actor": "admin"},
@@ -673,6 +634,42 @@ async def admin_update_order_status(
     return {"ok": True, "status": payload.status}
 
 
+class OrderPricingIn(BaseModel):
+    quoted_price: float = Field(..., ge=0)
+
+
+@api.patch("/admin/orders/{order_id}/pricing")
+async def admin_update_order_pricing(
+    order_id: str, payload: OrderPricingIn, admin=Depends(require_admin)
+) -> dict:
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await db.orders.update_one(
+        {"id": order_id}, {"$set": {"quoted_price": payload.quoted_price, "updated_at": now_iso()}}
+    )
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return doc
+
+
+class OrderDeliveredLogoIn(BaseModel):
+    delivered_logo_url: str
+
+
+@api.patch("/admin/orders/{order_id}/delivered-logo")
+async def admin_update_delivered_logo(
+    order_id: str, payload: OrderDeliveredLogoIn, admin=Depends(require_admin)
+) -> dict:
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await db.orders.update_one(
+        {"id": order_id}, {"$set": {"delivered_logo_url": payload.delivered_logo_url, "updated_at": now_iso()}}
+    )
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return doc
+
+
 # ------------------------------------------------------------------ admin: dashboard summary
 @api.get("/admin/dashboard/summary")
 async def admin_dashboard_summary(admin=Depends(require_admin)) -> dict:
@@ -710,6 +707,7 @@ class SettingsUpdateIn(BaseModel):
     open_slots: Optional[int] = None
     total_slots: Optional[int] = None
     portfolio_tags: Optional[List[str]] = None
+    robux_game_link: Optional[str] = None
 
 
 @api.get("/admin/settings")
@@ -736,6 +734,8 @@ async def admin_update_settings(
         updates["total_slots"] = int(payload.total_slots)
     if payload.portfolio_tags is not None:
         updates["portfolio_tags"] = [t.strip() for t in payload.portfolio_tags if t.strip()]
+    if payload.robux_game_link is not None:
+        updates["robux_game_link"] = payload.robux_game_link.strip()
     if not updates:
         raise HTTPException(400, "No changes provided")
     updates["last_content_updated"] = now_iso()
@@ -803,11 +803,10 @@ async def portal_login(payload: PortalLoginIn) -> dict:
             "email": email,
         }
 
-    # Magic-link mode: block emails with no prior request to prevent spam scans
+    # Magic-link mode: requires a prior commission request on file
     req = await db.requests.find_one({"email": email})
     if not req:
-        # Same success response — don't leak whether the email exists
-        return {"mode": "magic-link", "sent": True}
+        raise HTTPException(404, "You need to create an order first.")
 
     link_token = secrets.token_urlsafe(32)
     await db.magic_links.insert_one(
@@ -859,6 +858,145 @@ async def portal_get_order(order_id: str, client=Depends(require_client)) -> dic
     )
     if not doc:
         raise HTTPException(404, "Order not found")
+    return doc
+
+
+# ------------------------------------------------------------------ payments
+DEPOSIT_STAGE_STATUS = "Accepted – Awaiting Deposit"
+FINAL_STAGE_STATUS = "Delivered – Awaiting Final Payment"
+
+
+def _payment_amount_cents(order: dict, stage: str) -> int:
+    price = order.get("quoted_price")
+    if not price:
+        raise HTTPException(400, "This order hasn't been quoted a price yet")
+    return round(float(price) * 0.5 * 100)
+
+
+async def _confirm_payment(order_id: str, stage: str, *, method: str) -> None:
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        return
+    now = now_iso()
+    field = "deposit_paid" if stage == "deposit" else "final_paid"
+    next_status = "In Queue" if stage == "deposit" else "Delivered – Awaiting Review"
+    payment_status = "Deposit Paid" if stage == "deposit" else "Paid in Full"
+
+    await db.orders.update_one(
+        {"id": order_id},
+        {
+            "$set": {
+                field: True,
+                "status": next_status,
+                "payment_status": payment_status,
+                "payment_confirmation_requested": None,
+                "updated_at": now,
+            },
+            "$push": {"activity": {"at": now, "note": f"{stage.title()} payment confirmed via {method}", "actor": "system"}},
+        },
+    )
+    try:
+        if stage == "deposit":
+            email_deposit_confirmed(to=order["client_email"], name=order["client_name"], order_id=order_id)
+        else:
+            email_order_delivered(to=order["client_email"], name=order["client_name"], order_id=order_id)
+            email_review_request(to=order["client_email"], name=order["client_name"], order_id=order_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Payment-confirmed email failed: %s", exc)
+
+
+class CreatePaymentIntentIn(BaseModel):
+    stage: str  # "deposit" | "final"
+
+
+@api.post("/portal/orders/{order_id}/payment/create-intent")
+async def portal_create_payment_intent(
+    order_id: str, payload: CreatePaymentIntentIn, client=Depends(require_client)
+) -> dict:
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(503, "Stripe is not configured yet")
+    if payload.stage not in ("deposit", "final"):
+        raise HTTPException(400, "stage must be 'deposit' or 'final'")
+
+    order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
+    if not order:
+        raise HTTPException(404, "Order not found")
+
+    amount_cents = _payment_amount_cents(order, payload.stage)
+    intent = stripe.PaymentIntent.create(
+        amount=amount_cents,
+        currency="usd",
+        metadata={"order_id": order_id, "stage": payload.stage},
+        automatic_payment_methods={"enabled": True},
+    )
+    return {"client_secret": intent.client_secret, "amount_cents": amount_cents}
+
+
+@api.post("/webhooks/stripe")
+async def stripe_webhook(request: Request) -> dict:
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(503, "Stripe is not configured")
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+    try:
+        if STRIPE_WEBHOOK_SECRET:
+            event = stripe.Webhook.construct_event(payload, sig_header, STRIPE_WEBHOOK_SECRET)
+        else:
+            # No webhook secret configured yet (local dev without `stripe listen`) —
+            # accept the payload unverified so the flow is still testable.
+            event = json.loads(payload)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Invalid webhook payload: {exc}") from exc
+
+    if event.get("type") == "payment_intent.succeeded":
+        intent = event["data"]["object"]
+        metadata = intent.get("metadata", {})
+        order_id, stage = metadata.get("order_id"), metadata.get("stage")
+        if order_id and stage:
+            await _confirm_payment(order_id, stage, method="stripe")
+    return {"received": True}
+
+
+class MarkPaymentRequestedIn(BaseModel):
+    stage: str  # "deposit" | "final"
+    method: str = "robux"
+
+
+@api.post("/portal/orders/{order_id}/payment/mark-requested")
+async def portal_mark_payment_requested(
+    order_id: str, payload: MarkPaymentRequestedIn, client=Depends(require_client)
+) -> dict:
+    order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await db.orders.update_one(
+        {"id": order_id},
+        {
+            "$set": {
+                "payment_confirmation_requested": {
+                    "method": payload.method,
+                    "stage": payload.stage,
+                    "requested_at": now_iso(),
+                },
+                "updated_at": now_iso(),
+            }
+        },
+    )
+    return {"ok": True}
+
+
+class ConfirmPaymentIn(BaseModel):
+    stage: str
+    method: str = "manual"
+
+
+@api.post("/admin/orders/{order_id}/confirm-payment")
+async def admin_confirm_payment(order_id: str, payload: ConfirmPaymentIn, admin=Depends(require_admin)) -> dict:
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _confirm_payment(order_id, payload.stage, method=payload.method)
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return doc
 
 
@@ -981,6 +1119,72 @@ async def portal_submit_review(
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ brand kit (6 flat logo variants, zipped)
+async def _build_brand_kit_zip(order: dict) -> bytes:
+    logo_url = order.get("delivered_logo_url")
+    if not logo_url:
+        raise HTTPException(400, "No delivered logo attached to this order yet")
+
+    logo_pil = await _download_image(logo_url)
+    accent_hex = order.get("accent_color") or dominant_color_hex(logo_pil)
+    variants = generate_logo_kit(logo_pil, accent_hex=accent_hex)
+
+    buf = _io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for filename, data in variants.items():
+            zf.writestr(filename, data)
+    return buf.getvalue()
+
+
+@api.get("/portal/orders/{order_id}/brand-kit")
+async def portal_download_brand_kit(order_id: str, client=Depends(require_client)) -> Response:
+    order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order.get("status") != "Closed":
+        raise HTTPException(400, "Brand kit is available once your order is Closed")
+    zip_bytes = await _build_brand_kit_zip(order)
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": 'attachment; filename="VanceLogo_BrandKit.zip"'},
+    )
+
+
+class SendKitIn(BaseModel):
+    delivered_logo_url: Optional[str] = None
+    message: str = Field(default="Here's your brand kit!", max_length=2000)
+
+
+@api.post("/admin/orders/{order_id}/send-kit")
+async def admin_send_kit(order_id: str, payload: SendKitIn, admin=Depends(require_admin)) -> dict:
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+
+    if payload.delivered_logo_url:
+        await db.orders.update_one(
+            {"id": order_id}, {"$set": {"delivered_logo_url": payload.delivered_logo_url, "updated_at": now_iso()}}
+        )
+        order["delivered_logo_url"] = payload.delivered_logo_url
+
+    zip_bytes = await _build_brand_kit_zip(order)
+    zip_url = await _save_generated(
+        "brand-kits", "VanceLogo_BrandKit.zip", zip_bytes, content_type="application/zip", kind="brand-kit"
+    )
+    file_id = zip_url.rsplit("/", 1)[-1]
+
+    msg = await _persist_message(order_id, "admin", payload.message, [file_id])
+    email_new_message(
+        to=order["client_email"],
+        name=order["client_name"],
+        order_id=order_id,
+        preview=payload.message,
+        from_side="admin",
+    )
+    return msg
+
+
 # ------------------------------------------------------------------ portfolio CRUD (admin)
 class PortfolioIn(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
@@ -1060,6 +1264,55 @@ async def admin_delete_portfolio(item_id: str, admin=Depends(require_admin)) -> 
     return {"ok": True}
 
 
+# ------------------------------------------------------------------ portfolio publish flow
+# Simple flow (replaces the old mockup/auto-showcase system): admin uploads a
+# finished project photo, names it, and publishing auto-stamps a small
+# brightness-matched corner logo — no mockups, no per-mockup color variants,
+# no perspective warping.
+class PortfolioPublishIn(BaseModel):
+    image_url: str
+    title: str = Field(..., min_length=1, max_length=200)
+    description: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    home_visible: bool = False
+
+
+@api.post("/admin/portfolio/publish")
+async def admin_publish_portfolio(payload: PortfolioPublishIn, admin=Depends(require_admin)) -> dict:
+    if payload.home_visible:
+        home_count = await db.portfolio.count_documents({"home_visible": True})
+        if home_count >= 5:
+            raise HTTPException(400, "At most 5 items can be home-visible. Un-toggle one first.")
+
+    try:
+        raw = await _download_image(payload.image_url)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(400, f"Could not load image: {exc}") from exc
+
+    try:
+        watermarked = apply_corner_watermark(raw)
+        final_url = await _save_generated("portfolio", "cover.png", watermarked, kind="portfolio-cover")
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(500, f"Watermarking failed: {exc}") from exc
+
+    order_val = await db.portfolio.count_documents({})
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": payload.title.strip(),
+        "tags": payload.tags,
+        "cover_image_url": final_url,
+        "description": payload.description,
+        "accent_color": dominant_color_hex(raw),
+        "home_visible": payload.home_visible,
+        "published": True,
+        "order": order_val,
+        "created_at": now_iso(),
+    }
+    await db.portfolio.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
 # Overwrite public /portfolio to sort by `order` and support home-only filter
 @api.get("/portfolio/home")
 async def list_portfolio_home() -> List[dict]:
@@ -1077,10 +1330,20 @@ async def get_portfolio_item(item_id: str) -> dict:
     return doc
 
 
-# ------------------------------------------------------------------ automation settings (watermark + mockups)
+# ------------------------------------------------------------------ automation settings (watermark)
+class WatermarkInstance(BaseModel):
+    x_pct: float = Field(ge=0, le=1)
+    y_pct: float = Field(ge=0, le=1)
+    w_pct: float = Field(gt=0, le=1)
+    h_pct: float = Field(gt=0, le=1)
+
+
 class AutomationSettingsIn(BaseModel):
     watermark_opacity: Optional[float] = Field(default=None, ge=0.05, le=1.0)
-    watermark_size_pct: Optional[float] = Field(default=None, ge=0.05, le=1.0)
+    watermark_instances: Optional[List[WatermarkInstance]] = None
+
+
+DEFAULT_WATERMARK_INSTANCE = {"x_pct": 0.325, "y_pct": 0.325, "w_pct": 0.35, "h_pct": 0.35}
 
 
 @api.get("/admin/automation")
@@ -1088,7 +1351,7 @@ async def admin_get_automation(admin=Depends(require_admin)) -> dict:
     doc = await db.settings.find_one({"_id": "singleton"}) or {}
     return {
         "watermark_opacity": doc.get("watermark_opacity", 0.35),
-        "watermark_size_pct": doc.get("watermark_size_pct", 0.35),
+        "watermark_instances": doc.get("watermark_instances") or [DEFAULT_WATERMARK_INSTANCE],
         "watermark_url": (
             "https://customer-assets-lxgj4vgw.emergentagent.net/"
             "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/"
@@ -1100,7 +1363,11 @@ async def admin_get_automation(admin=Depends(require_admin)) -> dict:
 
 @api.patch("/admin/automation")
 async def admin_update_automation(payload: AutomationSettingsIn, admin=Depends(require_admin)) -> dict:
-    updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None}
+    updates: dict = {}
+    if payload.watermark_opacity is not None:
+        updates["watermark_opacity"] = payload.watermark_opacity
+    if payload.watermark_instances is not None:
+        updates["watermark_instances"] = [i.model_dump() for i in payload.watermark_instances]
     if not updates:
         raise HTTPException(400, "No changes provided")
     updates["last_content_updated"] = now_iso()
@@ -1108,202 +1375,71 @@ async def admin_update_automation(payload: AutomationSettingsIn, admin=Depends(r
     return await admin_get_automation(admin=admin)
 
 
-# ------------------------------------------------------------------ mockups library
-@api.get("/admin/mockups")
-async def admin_list_mockups(admin=Depends(require_admin)) -> List[dict]:
-    docs = await db.mockups.find({}, {"_id": 0}).sort("category", 1).to_list(100)
-    return docs
-
-
 # ------------------------------------------------------------------ auto-watermark preview
 class WatermarkPreviewIn(BaseModel):
     logo_url: str
+    instances: Optional[List[WatermarkInstance]] = None
+    opacity: Optional[float] = Field(default=None, ge=0.05, le=1.0)
 
 
 @api.post("/admin/watermark/preview")
 async def admin_watermark_preview(payload: WatermarkPreviewIn, admin=Depends(require_admin)) -> Response:
     settings = await db.settings.find_one({"_id": "singleton"}) or {}
-    opacity = float(settings.get("watermark_opacity", 0.35))
-    size_pct = float(settings.get("watermark_size_pct", 0.35))
+    opacity = payload.opacity if payload.opacity is not None else float(settings.get("watermark_opacity", 0.35))
+    instances = (
+        [i.model_dump() for i in payload.instances]
+        if payload.instances is not None
+        else (settings.get("watermark_instances") or [DEFAULT_WATERMARK_INSTANCE])
+    )
     wm_url = (
         "https://customer-assets-lxgj4vgw.emergentagent.net/"
         "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/"
         "pzblpyw9_Logo%20%2825%29.png"
     )
     try:
-        data = apply_watermark(payload.logo_url, wm_url, opacity=opacity, size_pct=size_pct)
+        data = apply_watermark_layers(payload.logo_url, wm_url, opacity=opacity, instances=instances)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"Watermark failed: {exc}") from exc
     return Response(content=data, media_type="image/png")
 
 
-# ------------------------------------------------------------------ showcase automation
-class ShowcasePrepareIn(BaseModel):
-    logo_url: str
-
-
-@api.post("/admin/orders/{order_id}/showcase/prepare")
-async def admin_showcase_prepare(
-    order_id: str, payload: ShowcasePrepareIn, admin=Depends(require_admin)
-) -> dict:
-    """Analyse the logo, extract accent, and list COMPATIBLE mockups.
-    Every mockup in our seed library only requires black/white/#EB211A logo
-    variants — all auto-generatable from any transparent PNG — so nothing is
-    filtered out today. The filter is kept as a hook for future formats
-    (e.g. multi-color logos that can't recolor cleanly)."""
-    order = await db.orders.find_one({"id": order_id})
-    if not order:
-        raise HTTPException(404, "Order not found")
-
-    try:
-        logo_pil = _download_image(payload.logo_url)
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(400, f"Could not load logo: {exc}") from exc
-
-    accent = dominant_color_hex(logo_pil)
-
-    mockups = await db.mockups.find({}, {"_id": 0}).sort("category", 1).to_list(100)
-    # Simple compatibility rule: all built-ins are compatible for any RGBA logo.
-    compatible = mockups
-
-    return {
-        "order_id": order_id,
-        "logo_url": payload.logo_url,
-        "accent_color": accent,
-        "compatible_mockups": compatible,
-    }
-
-
-class ShowcaseGenerateIn(BaseModel):
-    logo_url: str
-    mockup_ids: List[str]
-    rationale_headline: Optional[str] = None
-    rationale_bullets: List[str] = Field(default_factory=list)
-    portfolio_tags: List[str] = Field(default_factory=list)
-    social_banner_url: Optional[str] = None
-
-
-@api.post("/admin/orders/{order_id}/showcase/generate")
-async def admin_showcase_generate(
-    order_id: str, payload: ShowcaseGenerateIn, admin=Depends(require_admin)
-) -> dict:
-    """Generate every mockup + auto tile for the selected set. Persists rendered
-    outputs into object storage and returns URLs. Does NOT publish yet — user
-    must call /publish afterwards."""
-    order = await db.orders.find_one({"id": order_id})
-    if not order:
-        raise HTTPException(404, "Order not found")
-    if not payload.mockup_ids:
-        raise HTTPException(400, "Select at least one mockup")
-
-    logo_pil = _download_image(payload.logo_url)
-    accent = dominant_color_hex(logo_pil)
-
-    generated: list[dict] = []
-    mockups = await db.mockups.find({"id": {"$in": payload.mockup_ids}}).to_list(100)
-    for m in mockups:
-        try:
-            variant = recolor_logo(logo_pil, m.get("logo_hex", "#000000"))
-            if m["placement_type"] == "flat":
-                zone = tuple(m["zone"])  # type: ignore[assignment]
-                data = place_flat(m["url"], variant, zone=zone)
-            else:
-                corners = [tuple(c) for c in m["corners"]]
-                data = place_angled(m["url"], variant, corners=corners)
-            url = await _save_generated(order_id, f"mockup_{m['id']}.png", data)
-            generated.append({"kind": "mockup", "mockup_id": m["id"], "label": m["label"], "url": url})
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("Mockup %s failed: %s", m["id"], exc)
-
-    # Auto tiles
-    try:
-        typo = make_typography_tile(logo_pil)
-        generated.append({"kind": "typography", "url": await _save_generated(order_id, "typography.png", typo)})
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("typography tile failed: %s", exc)
-    try:
-        pat = make_pattern_tile(logo_pil, logo_hex=accent, bg_hex="#1A1A1A")
-        generated.append({"kind": "pattern", "url": await _save_generated(order_id, "pattern.png", pat)})
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("pattern tile failed: %s", exc)
-
-    # Persist draft
-    draft = {
-        "order_id": order_id,
-        "logo_url": payload.logo_url,
-        "accent_color": accent,
-        "tiles": generated,
-        "rationale_headline": payload.rationale_headline,
-        "rationale_bullets": payload.rationale_bullets,
-        "portfolio_tags": payload.portfolio_tags,
-        "social_banner_url": payload.social_banner_url,
-        "updated_at": now_iso(),
-    }
-    await db.showcase_drafts.update_one({"order_id": order_id}, {"$set": draft}, upsert=True)
-    return draft
-
-
-class ShowcasePublishIn(BaseModel):
-    title: str
-    home_visible: bool = False
-
-
-@api.post("/admin/orders/{order_id}/showcase/publish")
-async def admin_showcase_publish(
-    order_id: str, payload: ShowcasePublishIn, admin=Depends(require_admin)
-) -> dict:
-    draft = await db.showcase_drafts.find_one({"order_id": order_id})
-    if not draft:
-        raise HTTPException(404, "No draft to publish — run /generate first")
-
-    if payload.home_visible:
-        home_count = await db.portfolio.count_documents({"home_visible": True})
-        if home_count >= 5:
-            raise HTTPException(400, "At most 5 home-visible items")
-
-    order_val = await db.portfolio.count_documents({})
-    cover = next((t["url"] for t in draft["tiles"] if t["kind"] == "mockup"), None) or draft["logo_url"]
-    doc = {
-        "id": str(uuid.uuid4()),
-        "title": payload.title.strip(),
-        "tags": draft.get("portfolio_tags", []),
-        "cover_image_url": cover,
-        "description": draft.get("rationale_headline"),
-        "accent_color": draft.get("accent_color"),
-        "tiles": draft.get("tiles", []),
-        "rationale_headline": draft.get("rationale_headline"),
-        "rationale_bullets": draft.get("rationale_bullets", []),
-        "social_banner_url": draft.get("social_banner_url"),
-        "home_visible": bool(payload.home_visible),
-        "published": True,
-        "source_order_id": order_id,
-        "order": order_val,
-        "created_at": now_iso(),
-    }
-    await db.portfolio.insert_one(doc)
-    doc.pop("_id", None)
-    return doc
-
-
 # ------------------------------------------------------------------ helper: download logo for image_service
-def _download_image(url: str) -> "Image.Image":  # noqa: F821
+_SELF_FILE_URL_RE = re.compile(r"^(?:https?://[^/]+)?/api/files/([0-9a-fA-F-]{36})$")
+
+
+async def _download_image(url: str) -> "Image.Image":  # noqa: F821
+    """Fetch an image for processing. URLs pointing at our OWN /api/files/{id}
+    proxy are read straight from object storage instead of round-tripping
+    through HTTP — an async handler blocking on `requests.get` back into its
+    own single-worker server would otherwise deadlock waiting on a request
+    the server can never get around to serving."""
+    self_match = _SELF_FILE_URL_RE.match(url)
+    if self_match:
+        record = await db.files.find_one({"id": self_match.group(1), "is_deleted": False})
+        if not record:
+            raise ValueError("Referenced file not found")
+        data, _content_type = get_object(record["storage_path"])
+        return Image.open(_io.BytesIO(data)).convert("RGBA")
+
     resp = requests.get(url, timeout=30)
     resp.raise_for_status()
     return Image.open(_io.BytesIO(resp.content)).convert("RGBA")
 
 
-async def _save_generated(order_id: str, name: str, data: bytes) -> str:
+async def _save_generated(
+    namespace: str, name: str, data: bytes, *, content_type: str = "image/png", kind: str = "generated"
+) -> str:
     file_id = str(uuid.uuid4())
-    path = f"{APP_NAME}/showcase/{order_id}/{file_id}_{name}"
-    put_object(path, data, "image/png")
+    path = f"{APP_NAME}/{namespace}/{file_id}_{name}"
+    put_object(path, data, content_type)
     await db.files.insert_one(
         {
             "id": file_id,
             "storage_path": path,
             "original_filename": name,
-            "content_type": "image/png",
+            "content_type": content_type,
             "size": len(data),
-            "kind": "showcase",
+            "kind": kind,
             "created_at": now_iso(),
             "is_deleted": False,
         }

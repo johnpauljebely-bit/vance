@@ -12,8 +12,8 @@ export default function Faq() {
     <section
       id="faq"
       data-testid="faq-section"
-      className="reveal-on-scroll bg-[#F7F5F2] py-20 md:py-32"
-      style={{ "--section-accent": "#FE0183" }}
+      className="section-tinted-selection reveal-on-scroll bg-[#F7F5F2] py-20 md:py-32"
+      style={{ "--section-accent": "#FE5A00" }}
     >
       <div className="mx-auto max-w-7xl px-6 md:px-10">
         <div className="grid grid-cols-1 gap-12 lg:grid-cols-12">

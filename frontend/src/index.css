@@ -68,12 +68,17 @@
     font-family: "Lora", serif;
     font-style: italic;
     font-weight: 500;
-    color: var(--section-accent, #FF6B35);
+    color: var(--section-accent-text, var(--section-accent, #FF6B35));
     letter-spacing: -0.01em;
   }
 
+  /* Plain text/icon color — defaults to the section's true accent, but a
+     section may override --section-accent-text with a darkened tint when
+     the true accent (e.g. bright green/yellow) is too light to read as
+     text on a light background. Backgrounds/borders/selection always use
+     the true --section-accent so brand color stays undiluted there. */
   .section-accent-text {
-    color: var(--section-accent, #FF6B35);
+    color: var(--section-accent-text, var(--section-accent, #FF6B35));
   }
 
   .section-accent-bg {
@@ -84,8 +89,27 @@
     border-color: var(--section-accent, #FF6B35);
   }
 
+  .section-tinted-selection ::selection,
+  .section-tinted-selection::selection {
+    background: var(--section-accent, #FF6B35);
+    color: #ffffff;
+  }
+
+  /* Sections whose true accent is too light for white selection text
+     (Services green, Testimonials gold) flip selected text to charcoal. */
+  .section-tinted-selection.selection-ink-dark ::selection,
+  .section-tinted-selection.selection-ink-dark::selection {
+    color: #1A1A1A;
+  }
+
   .btn-primary {
-    @apply inline-flex items-center justify-center gap-2 rounded-pill bg-[#FF6B35] px-6 py-3 text-sm font-semibold text-white transition-[background-color,transform,box-shadow] duration-150 ease-out hover:bg-[#E85A24] hover:shadow-[0_8px_20px_-4px_rgba(255,107,53,0.4)] hover:scale-[1.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#FF6B35] focus-visible:ring-offset-2 focus-visible:ring-offset-[#F7F5F2] disabled:opacity-60 disabled:cursor-not-allowed;
+    @apply inline-flex items-center justify-center gap-2 rounded-pill px-6 py-3 text-sm font-semibold text-white transition-[background-color,transform,box-shadow,filter] duration-150 ease-out hover:filter hover:brightness-[0.92] hover:scale-[1.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[#F7F5F2] disabled:opacity-60 disabled:cursor-not-allowed;
+    background-color: var(--section-accent, #FF6B35);
+    --tw-ring-color: var(--section-accent, #FF6B35);
+  }
+
+  .btn-primary:hover {
+    box-shadow: 0 8px 20px -4px color-mix(in srgb, var(--section-accent, #FF6B35) 40%, transparent);
   }
 
   .btn-secondary {
@@ -105,7 +129,12 @@
   }
 
   .input-base {
-    @apply w-full rounded-[12px] border border-[rgba(26,26,26,0.15)] bg-white px-4 py-3 text-sm text-[#1A1A1A] placeholder:text-[#8A8588] transition-colors duration-150 focus:outline-none focus:border-[#FF6B35] focus:ring-2 focus:ring-[#FF6B35]/20;
+    @apply w-full rounded-[12px] border border-[rgba(26,26,26,0.15)] bg-white px-4 py-3 text-sm text-[#1A1A1A] placeholder:text-[#8A8588] transition-colors duration-150 focus:outline-none focus:ring-2;
+    --tw-ring-color: color-mix(in srgb, var(--section-accent, #FF6B35) 20%, transparent);
+  }
+
+  .input-base:focus {
+    border-color: var(--section-accent, #FF6B35);
   }
 
   .status-pill {

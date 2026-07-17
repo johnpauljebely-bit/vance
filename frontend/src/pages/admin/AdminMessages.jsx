@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { adminApi, adminMsgApi } from "@/lib/api";
+import { adminApi, adminMsgApi, publicApi } from "@/lib/api";
 import StatusPill from "@/pages/admin/_StatusPill";
 import { MessageBubble } from "@/pages/portal/ClientPortalOrder";
 import { toast } from "sonner";
-import { Send, Loader2, Search } from "lucide-react";
+import { Send, Loader2, Search, Package, Upload, X } from "lucide-react";
+import FileDropzone from "@/components/site/FileDropzone";
 
 export default function AdminMessages() {
   const [selectedId, setSelectedId] = useState(null);
@@ -90,9 +91,99 @@ export default function AdminMessages() {
   );
 }
 
+function SendKitPanel({ order, onClose, onSent }) {
+  const [logoUrl, setLogoUrl] = useState(order.delivered_logo_url || null);
+  const [logoPreview, setLogoPreview] = useState(null);
+  const [uploading, setUploading] = useState(false);
+  const [message, setMessage] = useState("Here's your brand kit!");
+
+  const uploadLogo = async (files) => {
+    const file = files[0];
+    if (!file) return;
+    setUploading(true);
+    setLogoPreview(URL.createObjectURL(file));
+    try {
+      const result = await publicApi.uploadReference(file);
+      setLogoUrl(result.url);
+    } catch {
+      toast.error("Logo upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const send = useMutation({
+    mutationFn: () => adminApi.sendKit(order.id, { delivered_logo_url: logoUrl, message }),
+    onSuccess: () => {
+      toast.success("Brand kit sent");
+      onSent();
+      onClose();
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to send kit"),
+  });
+
+  return (
+    <div className="border-b border-[rgba(26,26,26,0.08)] bg-[#F7F5F2] p-4" data-testid="send-kit-panel">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+          Send Brand Kit
+        </p>
+        <button type="button" onClick={onClose} aria-label="Close" className="text-[#8A8588] hover:text-[#1A1A1A]">
+          <X size={16} />
+        </button>
+      </div>
+
+      {!logoUrl ? (
+        <FileDropzone
+          testId="send-kit-logo-upload"
+          accept="image/*"
+          onFiles={uploadLogo}
+          className="mt-3 flex flex-col items-center justify-center rounded-[12px] border-2 border-dashed border-[rgba(26,26,26,0.2)] bg-white px-6 py-6 text-center transition-colors hover:border-[#FF6B35] hover:bg-[#FF6B35]/5"
+          activeClassName="border-[#FF6B35] bg-[#FF6B35]/5"
+        >
+          <Upload size={20} className="text-[#8A8588]" />
+          <p className="mt-2 text-sm font-semibold">
+            {uploading ? "Uploading…" : "Upload the final logo"}
+          </p>
+        </FileDropzone>
+      ) : (
+        <div className="mt-3 flex items-center gap-3">
+          {logoPreview && <img src={logoPreview} alt="" className="h-12 w-12 rounded-[8px] object-contain bg-white border border-[rgba(26,26,26,0.08)]" />}
+          <p className="text-xs text-[#8A8588]">Logo attached ✓</p>
+        </div>
+      )}
+
+      <div className="mt-3">
+        <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+          Message
+        </label>
+        <textarea
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          rows={2}
+          data-testid="send-kit-message"
+          className="input-base mt-1.5"
+        />
+      </div>
+
+      <button
+        type="button"
+        onClick={() => send.mutate()}
+        disabled={!logoUrl || uploading || send.isPending}
+        data-testid="send-kit-confirm-btn"
+        className="btn-primary mt-3"
+      >
+        {send.isPending ? <Loader2 size={14} className="animate-spin" /> : <Package size={14} />}
+        Generate &amp; send kit
+      </button>
+    </div>
+  );
+}
+
 function MessageThread({ order }) {
   const orderId = order.id;
   const [body, setBody] = useState("");
+  const [sendKitOpen, setSendKitOpen] = useState(false);
   const qc = useQueryClient();
   const listRef = useRef(null);
 
@@ -117,13 +208,30 @@ function MessageThread({ order }) {
 
   return (
     <>
-      <header className="px-5 py-3 border-b border-[rgba(26,26,26,0.08)] flex items-center justify-between">
+      <header className="px-5 py-3 border-b border-[rgba(26,26,26,0.08)] flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-bold">{order.client_name}</p>
           <p className="text-xs text-[#8A8588]">{order.client_email}</p>
         </div>
-        <StatusPill status={order.status} />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSendKitOpen((o) => !o)}
+            data-testid="send-kit-open-btn"
+            className="inline-flex items-center gap-1.5 rounded-pill border border-[rgba(26,26,26,0.15)] px-3 py-1.5 text-xs font-semibold hover:bg-[#1A1A1A] hover:text-white transition-colors"
+          >
+            <Package size={14} /> Send Kit
+          </button>
+          <StatusPill status={order.status} />
+        </div>
       </header>
+      {sendKitOpen && (
+        <SendKitPanel
+          order={order}
+          onClose={() => setSendKitOpen(false)}
+          onSent={() => qc.invalidateQueries({ queryKey: ["admin-messages", orderId] })}
+        />
+      )}
       <div
         ref={listRef}
         className="flex-1 overflow-y-auto p-5 space-y-3 bg-[#F7F5F2]"

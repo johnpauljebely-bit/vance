@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import Navbar from "@/components/site/Navbar";
 import Footer from "@/components/site/Footer";
 import { publicApi } from "@/lib/api";
-import { PORTFOLIO_PLACEHOLDERS } from "@/lib/brand";
 import { X } from "lucide-react";
 
 export default function Work() {
@@ -16,7 +15,7 @@ export default function Work() {
     queryKey: ["portfolio-home"],
     queryFn: publicApi.getPortfolioHome,
   });
-  const pool = liveItems.length ? liveItems : PORTFOLIO_PLACEHOLDERS;
+  const pool = liveItems;
 
   const openItem = useMemo(() => pool.find((p) => p.id === openId), [pool, openId]);
 
@@ -50,6 +49,16 @@ export default function Work() {
           className="mt-12 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
           data-testid="work-grid"
         >
+          {pool.length === 0 && (
+            <div className="col-span-full rounded-[24px] border-2 border-dashed border-[rgba(26,26,26,0.15)] p-16 text-center">
+              <p className="text-sm font-semibold uppercase tracking-widest text-[#8A8588]">
+                Coming soon
+              </p>
+              <p className="mt-2 text-[#1A1A1A]/80">
+                Case studies will appear here once published from the Showcase tool.
+              </p>
+            </div>
+          )}
           {pool.map((item) => (
             <Link
               key={item.id}

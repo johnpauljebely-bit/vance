@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { PORTFOLIO_PLACEHOLDERS, PORTFOLIO_TAG_ORDER } from "@/lib/brand";
+import { PORTFOLIO_TAG_ORDER } from "@/lib/brand";
 import { publicApi } from "@/lib/api";
 import { useQuery } from "@tanstack/react-query";
 import { ArrowRight } from "lucide-react";
@@ -14,7 +14,7 @@ export default function Portfolio() {
   });
 
   const items = useMemo(() => {
-    const pool = liveItems.length ? liveItems : PORTFOLIO_PLACEHOLDERS;
+    const pool = liveItems;
     const filtered =
       activeTag === "All"
         ? pool
@@ -26,17 +26,18 @@ export default function Portfolio() {
     <section
       id="work"
       data-testid="portfolio-section"
-      className="reveal-on-scroll bg-[#F7F5F2] py-20 md:py-32"
+      className="section-tinted-selection reveal-on-scroll bg-[#F7F5F2] py-20 md:py-32"
+      style={{ "--section-accent": "#0201FC" }}
     >
       <div className="mx-auto max-w-7xl px-6 md:px-10">
         <div className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
           <div className="max-w-2xl">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#FF6B35]">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
               Selected Work
             </p>
             <h2 className="mt-3 text-4xl font-bold tracking-[-0.03em] md:text-5xl">
               Real brands, built{" "}
-              <span className="accent-italic text-[#FF6B35]">honestly.</span>
+              <span className="accent-italic">honestly.</span>
             </h2>
             <p className="mt-4 text-[#1A1A1A]/70">
               Every case study is a full identity system — logo, palette,
@@ -80,7 +81,7 @@ export default function Portfolio() {
           <Link
             to="/work"
             data-testid="portfolio-view-more"
-            className="inline-flex items-center gap-2 text-sm font-semibold text-[#8A8588] hover:text-[#FF6B35] transition-colors"
+            className="inline-flex items-center gap-2 text-sm font-semibold text-[#8A8588] hover:section-accent-text transition-colors"
           >
             View more work <ArrowRight size={16} />
           </Link>

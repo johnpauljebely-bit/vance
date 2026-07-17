@@ -10,6 +10,7 @@ import {
 import { COMMISSION_TYPES } from "@/lib/brand";
 import { toast } from "sonner";
 import { Upload, X, CheckCircle2, Loader2 } from "lucide-react";
+import FileDropzone from "./FileDropzone";
 
 const MAX_FILES = 4;
 const MAX_SIZE_MB = 10;
@@ -23,16 +24,20 @@ export default function CommissionForm() {
   const [files, setFiles] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [attempted, setAttempted] = useState(false);
 
-  const canSubmit =
-    name.trim().length > 0 &&
-    email.includes("@") &&
-    commissionType &&
-    description.trim().length >= 10 &&
-    !submitting;
+  const fieldErrors = {
+    name: name.trim().length > 0 ? null : "Enter your name.",
+    email: email.includes("@") ? null : "Enter a valid email address.",
+    description:
+      description.trim().length >= 10
+        ? null
+        : `Add a bit more detail (at least 10 characters — ${description.trim().length}/10 so far).`,
+  };
+  const isValid = Object.values(fieldErrors).every((e) => !e);
+  const canSubmit = isValid && !submitting;
 
-  const handleFilePick = async (e) => {
-    const list = Array.from(e.target.files || []);
+  const handleFilePick = async (list) => {
     if (!list.length) return;
 
     if (files.length + list.length > MAX_FILES) {
@@ -76,7 +81,13 @@ export default function CommissionForm() {
 
   const onSubmit = async (e) => {
     e.preventDefault();
-    if (!canSubmit) return;
+    setAttempted(true);
+    if (!isValid) {
+      const firstError = Object.values(fieldErrors).find(Boolean);
+      toast.error(firstError || "Please fill in the required fields.");
+      return;
+    }
+    if (submitting) return;
 
     // Wait for any still-uploading refs
     if (files.some((f) => f.uploading)) {
@@ -109,7 +120,8 @@ export default function CommissionForm() {
       <section
         id="request"
         data-testid="commission-form-section"
-        className="reveal-on-scroll bg-white py-20 md:py-32"
+        className="section-tinted-selection selection-ink-dark bg-white py-20 md:py-32"
+        style={{ "--section-accent": "#43FD6B", "--section-accent-text": "#15803D" }}
       >
         <div className="mx-auto max-w-3xl px-6 md:px-10">
           <div
@@ -121,7 +133,7 @@ export default function CommissionForm() {
             </div>
             <h2 className="mt-6 text-3xl font-bold tracking-[-0.03em] md:text-4xl">
               Request sent —{" "}
-              <span className="accent-italic text-[#FF6B35]">thanks!</span>
+              <span className="accent-italic">thanks!</span>
             </h2>
             <p className="mt-3 max-w-md text-[#1A1A1A]/70">
               You'll get a personal reply from Vance within a few days. If it's a
@@ -152,16 +164,17 @@ export default function CommissionForm() {
     <section
       id="request"
       data-testid="commission-form-section"
-      className="reveal-on-scroll bg-white py-20 md:py-32"
+      className="section-tinted-selection reveal-on-scroll bg-white py-20 md:py-32"
+      style={{ "--section-accent": "#0201FC" }}
     >
       <div className="mx-auto max-w-3xl px-6 md:px-10">
         <div className="text-center">
-          <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#FF6B35]">
+          <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
             Start a commission
           </p>
           <h2 className="mt-3 text-4xl font-bold tracking-[-0.03em] md:text-5xl">
             Tell me about your{" "}
-            <span className="accent-italic text-[#FF6B35]">project.</span>
+            <span className="accent-italic">project.</span>
           </h2>
           <p className="mt-4 text-[#1A1A1A]/70">
             The more detail you can share, the better my quote and turnaround
@@ -176,7 +189,7 @@ export default function CommissionForm() {
           noValidate
         >
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-            <Field label="Your name" required>
+            <Field label="Your name" required error={attempted ? fieldErrors.name : null}>
               <input
                 data-testid="form-name-input"
                 className="input-base"
@@ -187,7 +200,7 @@ export default function CommissionForm() {
                 required
               />
             </Field>
-            <Field label="Email address" required>
+            <Field label="Email address" required error={attempted ? fieldErrors.email : null}>
               <input
                 data-testid="form-email-input"
                 className="input-base"
@@ -222,7 +235,12 @@ export default function CommissionForm() {
             </Select>
           </Field>
 
-          <Field label="Project brief" required hint="Vision, tagline, references, target audience — anything helps.">
+          <Field
+            label="Project brief"
+            required
+            hint="Vision, tagline, references, target audience — anything helps."
+            error={attempted ? fieldErrors.description : null}
+          >
             <textarea
               data-testid="form-description-textarea"
               className="input-base min-h-[160px] resize-y"
@@ -252,18 +270,14 @@ export default function CommissionForm() {
             label="Reference images (optional)"
             hint={`Up to ${MAX_FILES} images, ${MAX_SIZE_MB}MB each. JPG, PNG, or WebP.`}
           >
-            <label
-              data-testid="form-upload-dropzone"
-              className="flex cursor-pointer flex-col items-center justify-center rounded-[12px] border-2 border-dashed border-[rgba(26,26,26,0.2)] bg-[#F7F5F2] px-6 py-10 text-center transition-colors hover:border-[#FF6B35] hover:bg-[#FF6B35]/5"
+            <FileDropzone
+              testId="form-upload-dropzone"
+              accept="image/*"
+              multiple
+              onFiles={handleFilePick}
+              className="flex flex-col items-center justify-center rounded-[12px] border-2 border-dashed border-[rgba(26,26,26,0.2)] bg-[#F7F5F2] px-6 py-10 text-center transition-colors hover:section-accent-border hover:bg-[color:color-mix(in_srgb,var(--section-accent)_5%,transparent)]"
+              activeClassName="section-accent-border bg-[color:color-mix(in_srgb,var(--section-accent)_8%,transparent)]"
             >
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                className="sr-only"
-                onChange={handleFilePick}
-                data-testid="form-upload-input"
-              />
               <Upload size={24} className="text-[#8A8588]" />
               <p className="mt-3 text-sm font-semibold">
                 Click or drop files here
@@ -271,7 +285,7 @@ export default function CommissionForm() {
               <p className="mt-1 text-xs text-[#8A8588]">
                 JPG · PNG · WebP · max {MAX_SIZE_MB}MB each
               </p>
-            </label>
+            </FileDropzone>
 
             {files.length > 0 && (
               <ul className="mt-3 space-y-2" data-testid="form-upload-list">
@@ -307,20 +321,20 @@ export default function CommissionForm() {
           <div className="flex flex-col-reverse gap-3 pt-2 sm:flex-row sm:items-center sm:justify-between">
             <p className="text-xs text-[#8A8588]">
               By submitting, you agree to our{" "}
-              <a href="/terms" className="underline hover:text-[#FF6B35]">
+              <a href="/terms" className="underline hover:section-accent-text">
                 Terms
               </a>{" "}
               and{" "}
-              <a href="/privacy" className="underline hover:text-[#FF6B35]">
+              <a href="/privacy" className="underline hover:section-accent-text">
                 Privacy Policy
               </a>
               .
             </p>
             <button
               type="submit"
-              disabled={!canSubmit}
+              disabled={submitting}
               data-testid="commission-submit-btn"
-              className="btn-primary min-w-[180px]"
+              className={`btn-primary min-w-[180px] ${!isValid ? "opacity-60" : ""}`}
             >
               {submitting ? (
                 <>
@@ -337,15 +351,21 @@ export default function CommissionForm() {
   );
 }
 
-function Field({ label, required, hint, children }) {
+function Field({ label, required, hint, error, children }) {
   return (
     <div className="space-y-1.5">
       <label className="block text-xs font-bold uppercase tracking-widest text-[#1A1A1A]/80">
         {label}
-        {required && <span className="text-[#FF6B35]"> *</span>}
+        {required && <span className="section-accent-text"> *</span>}
       </label>
       {children}
-      {hint && <p className="text-xs text-[#8A8588]">{hint}</p>}
+      {error ? (
+        <p className="text-xs font-semibold text-[#EF4444]" data-testid="field-error">
+          {error}
+        </p>
+      ) : (
+        hint && <p className="text-xs text-[#8A8588]">{hint}</p>
+      )}
     </div>
   );
 }

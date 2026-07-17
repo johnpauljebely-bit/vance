@@ -13,17 +13,18 @@ export default function Testimonials() {
   return (
     <section
       data-testid="testimonials-section"
-      className="reveal-on-scroll bg-white py-20 md:py-32"
+      className="section-tinted-selection selection-ink-dark reveal-on-scroll bg-white py-20 md:py-32"
+      style={{ "--section-accent": "#FFD815", "--section-accent-text": "#B45309" }}
     >
       <div className="mx-auto max-w-7xl px-6 md:px-10">
         <div className="flex flex-col items-start justify-between gap-6 md:flex-row md:items-end">
           <div className="max-w-2xl">
-            <p className="text-xs font-bold uppercase tracking-[0.2em] text-[#FF6B35]">
+            <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
               Kind words
             </p>
             <h2 className="mt-3 text-4xl font-bold tracking-[-0.03em] md:text-5xl">
               What clients{" "}
-              <span className="accent-italic text-[#FF6B35]">actually</span> say.
+              <span className="accent-italic">actually</span> say.
             </h2>
           </div>
           <p className="max-w-sm text-sm text-[#8A8588]">
@@ -54,7 +55,7 @@ export default function Testimonials() {
               >
                 <div className="flex gap-1">
                   {Array.from({ length: t.rating || 5 }).map((_, i) => (
-                    <Star key={i} size={16} className="fill-[#FF6B35] text-[#FF6B35]" />
+                    <Star key={i} size={16} className="fill-current section-accent-text" />
                   ))}
                 </div>
                 <p className="mt-4 flex-1 text-[#1A1A1A]/90 leading-relaxed">

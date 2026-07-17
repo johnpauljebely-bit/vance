@@ -69,8 +69,8 @@ export default function Services() {
     <section
       id="services"
       data-testid="services-section"
-      className="reveal-on-scroll bg-white py-20 md:py-32"
-      style={{ "--section-accent": "#0201FC" }}
+      className="section-tinted-selection selection-ink-dark reveal-on-scroll bg-white py-20 md:py-32"
+      style={{ "--section-accent": "#43FD6B", "--section-accent-text": "#15803D" }}
     >
       <div className="mx-auto max-w-7xl px-6 md:px-10">
         <div className="grid grid-cols-1 items-end gap-6 md:grid-cols-12">
@@ -99,7 +99,7 @@ export default function Services() {
             data-testid={`feature-tile-${featured.key}`}
             className="col-span-12 lg:col-span-7 relative overflow-hidden rounded-[32px] border border-[rgba(26,26,26,0.08)] bg-[#F7F5F2] p-8 md:p-10 transition-[transform,box-shadow] duration-200 ease-out hover:-translate-y-1 hover:shadow-[0_28px_60px_-20px_rgba(26,26,26,0.18)]"
           >
-            <div className="pointer-events-none absolute -top-24 -right-24 h-64 w-64 rounded-full bg-[#FF6B35]/8 blur-3xl" />
+            <div className="pointer-events-none absolute -top-24 -right-24 h-64 w-64 rounded-full bg-[color:color-mix(in_srgb,var(--section-accent)_8%,transparent)] blur-3xl" />
             <div className="relative flex flex-col md:flex-row md:items-center gap-8">
               <img
                 src={featured.asset}
@@ -200,7 +200,7 @@ function ServiceCard({ service, index }) {
         data-testid={`service-${service.title.replace(/\s+/g, "-").toLowerCase()}`}
         className={`${service.span || "md:col-span-6"} col-span-12 group relative overflow-hidden rounded-[24px] bg-[#1A1A1A] p-8 md:p-10 text-white transition-transform hover:-translate-y-1`}
       >
-        <div className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full bg-[#FF6B35]/25 blur-3xl" />
+        <div className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full bg-[color:color-mix(in_srgb,var(--section-accent)_25%,transparent)] blur-3xl" />
         <div className="relative flex items-start justify-between gap-6">
           <div className="flex-1">
             <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">
@@ -213,7 +213,7 @@ function ServiceCard({ service, index }) {
               {service.copy}
             </p>
           </div>
-          <span className="rounded-pill bg-[#FF6B35] px-4 py-1.5 text-xs font-bold text-white shrink-0">
+          <span className="rounded-pill section-accent-bg px-4 py-1.5 text-xs font-bold text-[#1A1A1A] shrink-0">
             Get a quote
           </span>
         </div>
@@ -224,7 +224,7 @@ function ServiceCard({ service, index }) {
     return (
       <div
         data-testid={`service-${service.title.replace(/\s+/g, "-").toLowerCase()}`}
-        className={`${service.span || "md:col-span-6"} col-span-12 group rounded-[24px] border-2 border-dashed border-[#1A1A1A]/25 bg-transparent p-8 md:p-10 transition-colors hover:border-[#FF6B35] hover:bg-[#FF6B35]/5`}
+        className={`${service.span || "md:col-span-6"} col-span-12 group rounded-[24px] border-2 border-dashed border-[#1A1A1A]/25 bg-transparent p-8 md:p-10 transition-colors hover:section-accent-border hover:bg-[color:color-mix(in_srgb,var(--section-accent)_5%,transparent)]`}
       >
         <div className="flex items-start justify-between gap-6">
           <div className="flex-1">
@@ -250,7 +250,7 @@ function ServiceCard({ service, index }) {
       data-testid={`service-${service.title.replace(/\s+/g, "-").toLowerCase()}`}
       className={`${service.span || "md:col-span-6"} col-span-12 group flex items-start gap-4 rounded-[24px] border border-[rgba(26,26,26,0.1)] bg-white p-8 transition-colors hover:border-[#1A1A1A]`}
     >
-      <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-full bg-[#FF6B35]/12 text-xs font-bold section-accent-text">
+      <div className="mt-1 flex h-9 w-9 items-center justify-center rounded-full bg-[color:color-mix(in_srgb,var(--section-accent)_12%,transparent)] text-xs font-bold section-accent-text">
         {String(index).padStart(2, "0")}
       </div>
       <div className="flex-1">

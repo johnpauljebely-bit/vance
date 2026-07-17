@@ -15,55 +15,6 @@ export const ASSETS = {
   iconBoard: `${CDN2}/yvx6pdop_5.png`,
 };
 
-// Placeholder portfolio imagery until real case studies are auto-generated in Phase 5.
-export const PORTFOLIO_PLACEHOLDERS = [
-  {
-    id: "sample-1",
-    title: "Sable Studio",
-    tags: ["Logo", "Brand Identity"],
-    image: "https://images.unsplash.com/photo-1623305465231-d884ce752d59?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHwxfHxidXNpbmVzcyUyMGNhcmQlMjBtb2NrdXB8ZW58MHx8fHwxNzg0MTY1NDUwfDA&ixlib=rb-4.1.0&q=85",
-    accent: "#E7DFD3",
-    span: "col-span-12 md:col-span-8 md:row-span-2",
-    height: "h-[420px] md:h-[560px]",
-  },
-  {
-    id: "sample-2",
-    title: "Loop Athletics",
-    tags: ["Logo"],
-    image: "https://images.unsplash.com/photo-1544816155-12df9643f363?crop=entropy&cs=srgb&fm=jpg&ixid=M3w8NjA1NjZ8MHwxfHNlYXJjaHwyfHx0b3RlJTIwYmFnJTIwbW9ja3VwfGVufDB8fHx8MTc4NDE2NTQ1MXww&ixlib=rb-4.1.0&q=85",
-    accent: "#2C2C2C",
-    span: "col-span-12 md:col-span-4",
-    height: "h-[260px]",
-  },
-  {
-    id: "sample-3",
-    title: "Northline Café",
-    tags: ["Brand Identity"],
-    image: "https://images.unsplash.com/photo-1695048168808-4bbfa1efdfa7?crop=entropy&cs=srgb&fm=jpg&ixid=M3w8NjA1MDV8MHwxfHNlYXJjaHwxfHxzdG9yZWZyb250JTIwc2lnbiUyMG1vY2t1cHxlbnwwfHx8fDE3ODQxNjU0NTF8MA&ixlib=rb-4.1.0&q=85",
-    accent: "#3B3F44",
-    span: "col-span-12 md:col-span-4",
-    height: "h-[280px]",
-  },
-  {
-    id: "sample-4",
-    title: "Meridian Guild",
-    tags: ["Brand Identity", "Social Kit"],
-    image: "https://images.unsplash.com/photo-1781444456332-f65b7080a179?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODF8MHwxfHNlYXJjaHwxfHxicmFuZCUyMGlkZW50aXR5JTIwYm9hcmQlMjBtb2NrdXB8ZW58MHx8fHwxNzg0MTY1NDU4fDA&ixlib=rb-4.1.0&q=85",
-    accent: "#F0EAD8",
-    span: "col-span-12 md:col-span-6",
-    height: "h-[320px]",
-  },
-  {
-    id: "sample-5",
-    title: "Halcyon Type",
-    tags: ["Logo", "Brand Identity"],
-    image: "https://images.unsplash.com/photo-1520764588094-8fc067746a8e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzR8MHwxfHNlYXJjaHwzfHx0eXBvZ3JhcGh5JTIwc3BlY2ltZW4lMjBtb2NrdXB8ZW58MHx8fHwxNzg0MTY1NDU4fDA&ixlib=rb-4.1.0&q=85",
-    accent: "#1F1B18",
-    span: "col-span-12 md:col-span-6",
-    height: "h-[320px]",
-  },
-];
-
 export const PORTFOLIO_TAG_ORDER = ["All", "Logo", "Brand Identity", "Social Kit"];
 
 export const COMMISSION_TYPES = [

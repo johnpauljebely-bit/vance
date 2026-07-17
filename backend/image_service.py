@@ -1,10 +1,10 @@
-"""Image processing service — watermark, mockup placement, color variants.
+"""Image processing service — watermarking and flat color variants.
 
-- Watermark: centered, opacity/size configurable via Settings (Automation).
-- Flat mockup placement: paste logo into an (x, y, w, h) zone.
-- Angled mockup placement: 4-corner perspective warp via OpenCV.
-- Auto color variants: recolor logo (black, white, or arbitrary hex) preserving alpha.
-- Dominant color extraction for case-study page accent tint.
+- Manual watermark layers: opacity + admin-positioned/sized boxes (canvas editor).
+- Auto corner watermark: brightness-detects the target corner, picks black/white
+  brand logo for contrast, no warping — simple corner badge only.
+- Logo kit: flat recolor / solid-background-swap variants, no warping.
+- Dominant color extraction for accent tints.
 """
 
 from __future__ import annotations
@@ -13,12 +13,22 @@ import io
 import logging
 from typing import Optional
 
-import cv2
 import numpy as np
 import requests
 from PIL import Image, ImageEnhance
 
 logger = logging.getLogger("vance.image")
+
+# Vance's own brand mark — used as the corner-watermark stamp on portfolio
+# photos (not the client's project logo).
+BRAND_LOGO_BLACK_URL = (
+    "https://customer-assets-lxgj4vgw.emergentagent.net/"
+    "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/2nhu3pin_Untitled%20design%20%284%29.png"
+)
+BRAND_LOGO_WHITE_URL = (
+    "https://customer-assets-lxgj4vgw.emergentagent.net/"
+    "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/jlsm9cq4_Untitled%20design%20%285%29.png"
+)
 
 
 def _download(url: str) -> Image.Image:
@@ -54,192 +64,136 @@ def recolor_logo(logo: Image.Image, hex_color: str) -> Image.Image:
     return Image.fromarray(tinted, "RGBA")
 
 
+def flatten_on_bg(logo: Image.Image, bg_hex: str) -> Image.Image:
+    """Composite a logo onto a solid opaque background (no transparency)."""
+    logo = logo.convert("RGBA")
+    bg = Image.new("RGBA", logo.size, bg_hex)
+    bg.alpha_composite(logo)
+    return bg.convert("RGB")
+
+
 def dominant_color_hex(logo: Image.Image) -> str:
-    """Approx dominant color of opaque pixels — used as case-study accent tint."""
+    """Approx dominant color of opaque pixels — used as accent tint."""
     arr = np.array(logo.convert("RGBA"))
     mask = arr[..., 3] > 40
     if not mask.any():
         return "#F7F5F2"
     pixels = arr[mask][:, :3]
-    # Average color, biased toward saturated pixels
     avg = pixels.mean(axis=0).astype(int)
     return "#{:02X}{:02X}{:02X}".format(*avg)
 
 
-# ---------------------------------------------------------- watermark
-def apply_watermark(
+# ---------------------------------------------------------- manual watermark (canvas editor)
+def apply_watermark_layers(
     original_url_or_img,
     watermark_url_or_img,
     *,
     opacity: float = 0.35,
-    size_pct: float = 0.35,
+    instances: Optional[list[dict]] = None,
 ) -> bytes:
-    """Composite the watermark at the CENTER of the original image.
-    - opacity in [0, 1]
-    - size_pct in (0, 1]: watermark width as fraction of original width
-    Returns PNG bytes.
+    """Composite one or more independently positioned/sized watermark layers
+    over the original image — click-to-place / drag-to-move / drag-to-resize
+    canvas editor. Each instance is {x_pct, y_pct, w_pct, h_pct}, fractions
+    (0-1) of the base image's width/height so placement is resolution-
+    independent between the browser preview and the full-size render.
+    Opacity is a single global knob applied to every instance.
     """
     base = original_url_or_img if isinstance(original_url_or_img, Image.Image) else _download(original_url_or_img)
-    wm = watermark_url_or_img if isinstance(watermark_url_or_img, Image.Image) else _download(watermark_url_or_img)
+    wm_src = watermark_url_or_img if isinstance(watermark_url_or_img, Image.Image) else _download(watermark_url_or_img)
 
     base = base.convert("RGBA")
-    wm = wm.convert("RGBA")
+    wm_src = wm_src.convert("RGBA")
 
-    # Scale watermark
-    target_w = max(1, int(base.width * size_pct))
-    ratio = target_w / wm.width
-    target_h = max(1, int(wm.height * ratio))
-    wm = wm.resize((target_w, target_h), Image.LANCZOS)
-
-    # Apply opacity
     if opacity < 1.0:
-        alpha = wm.split()[3]
+        alpha = wm_src.split()[3]
         alpha = ImageEnhance.Brightness(alpha).enhance(opacity)
-        wm.putalpha(alpha)
+        wm_src = wm_src.copy()
+        wm_src.putalpha(alpha)
 
-    # Paste centered
-    cx = (base.width - wm.width) // 2
-    cy = (base.height - wm.height) // 2
     canvas = base.copy()
-    canvas.alpha_composite(wm, dest=(cx, cy))
+    for inst in instances or [{"x_pct": 0.325, "y_pct": 0.325, "w_pct": 0.35, "h_pct": 0.35}]:
+        w = max(1, int(base.width * inst["w_pct"]))
+        h = max(1, int(base.height * inst["h_pct"]))
+        x = int(base.width * inst["x_pct"])
+        y = int(base.height * inst["y_pct"])
+        resized = wm_src.resize((w, h), Image.LANCZOS)
+        canvas.alpha_composite(resized, dest=(x, y))
 
     return _to_bytes(canvas)
 
 
-# ---------------------------------------------------------- flat placement
-def place_flat(
-    mockup_url_or_img,
-    logo_url_or_img,
-    *,
-    zone: tuple[int, int, int, int],  # (x, y, w, h)
-) -> bytes:
-    """Paste (with alpha) the logo into a rectangular zone of the mockup.
-    Logo is centered inside the zone at max size that fits, preserving aspect."""
-    base = mockup_url_or_img if isinstance(mockup_url_or_img, Image.Image) else _download(mockup_url_or_img)
-    logo = logo_url_or_img if isinstance(logo_url_or_img, Image.Image) else _download(logo_url_or_img)
-    base = base.convert("RGBA")
-    logo = logo.convert("RGBA")
-
-    x, y, w, h = zone
-    ar_zone = w / h
-    ar_logo = logo.width / logo.height
-    if ar_logo >= ar_zone:
-        # Fit width
-        new_w = w
-        new_h = max(1, int(w / ar_logo))
+# ---------------------------------------------------------- auto corner watermark
+def _region_is_dark(img: Image.Image, *, corner: str = "bottom-right", region_pct: float = 0.25) -> bool:
+    """Sample the target corner region and return True if it's dark enough
+    that a white logo would read better than black."""
+    rgb = img.convert("RGB")
+    w, h = rgb.size
+    rw, rh = max(1, int(w * region_pct)), max(1, int(h * region_pct))
+    if corner == "bottom-right":
+        box = (w - rw, h - rh, w, h)
+    elif corner == "bottom-left":
+        box = (0, h - rh, rw, h)
+    elif corner == "top-right":
+        box = (w - rw, 0, w, rh)
     else:
-        new_h = h
-        new_w = max(1, int(h * ar_logo))
+        box = (0, 0, rw, rh)
+    region = np.array(rgb.crop(box)).astype(float)
+    luminance = 0.2126 * region[..., 0] + 0.7152 * region[..., 1] + 0.0722 * region[..., 2]
+    return bool(luminance.mean() < 128)
 
-    logo_r = logo.resize((new_w, new_h), Image.LANCZOS)
-    px = x + (w - new_w) // 2
-    py = y + (h - new_h) // 2
+
+def apply_corner_watermark(
+    original_url_or_img,
+    *,
+    corner: str = "bottom-right",
+    scale_pct: float = 0.14,
+    padding_pct: float = 0.035,
+    logo_black_url: str = BRAND_LOGO_BLACK_URL,
+    logo_white_url: str = BRAND_LOGO_WHITE_URL,
+) -> bytes:
+    """Auto-detect corner brightness and stamp the contrasting brand logo
+    (white on dark, black on light) as a small corner badge. No warping,
+    no complex placement — a simple flat overlay."""
+    base = original_url_or_img if isinstance(original_url_or_img, Image.Image) else _download(original_url_or_img)
+    base = base.convert("RGBA")
+
+    dark = _region_is_dark(base, corner=corner)
+    logo = _download(logo_white_url if dark else logo_black_url).convert("RGBA")
+
+    target_w = max(1, int(base.width * scale_pct))
+    ratio = target_w / logo.width
+    target_h = max(1, int(logo.height * ratio))
+    logo_r = logo.resize((target_w, target_h), Image.LANCZOS)
+
+    pad_x = int(base.width * padding_pct)
+    pad_y = int(base.height * padding_pct)
+    if corner == "bottom-right":
+        x, y = base.width - target_w - pad_x, base.height - target_h - pad_y
+    elif corner == "bottom-left":
+        x, y = pad_x, base.height - target_h - pad_y
+    elif corner == "top-right":
+        x, y = base.width - target_w - pad_x, pad_y
+    else:
+        x, y = pad_x, pad_y
 
     canvas = base.copy()
-    canvas.alpha_composite(logo_r, dest=(px, py))
+    canvas.alpha_composite(logo_r, dest=(x, y))
     return _to_bytes(canvas)
 
 
-# ---------------------------------------------------------- angled placement
-def place_angled(
-    mockup_url_or_img,
-    logo_url_or_img,
-    *,
-    corners: list[tuple[int, int]],  # 4 (x, y) points: TL, TR, BR, BL
-) -> bytes:
-    """Warp the logo into a quadrilateral defined by 4 corner points using
-    OpenCV's perspective transform (same math as Photoshop Free Transform →
-    Perspective). Preserves alpha."""
-    base_pil = mockup_url_or_img if isinstance(mockup_url_or_img, Image.Image) else _download(mockup_url_or_img)
-    logo_pil = logo_url_or_img if isinstance(logo_url_or_img, Image.Image) else _download(logo_url_or_img)
-    base_pil = base_pil.convert("RGBA")
-    logo_pil = logo_pil.convert("RGBA")
-
-    base = np.array(base_pil)  # (H, W, 4)
-    logo = np.array(logo_pil)
-
-    lh, lw = logo.shape[:2]
-    src = np.float32([[0, 0], [lw - 1, 0], [lw - 1, lh - 1], [0, lh - 1]])
-    dst = np.float32(corners)
-    M = cv2.getPerspectiveTransform(src, dst)
-
-    Hb, Wb = base.shape[:2]
-    warped = cv2.warpPerspective(
-        logo, M, (Wb, Hb),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0, 0),
-    )
-
-    # Alpha-composite warped over base
-    warped_pil = Image.fromarray(warped, "RGBA")
-    canvas = base_pil.copy()
-    canvas.alpha_composite(warped_pil, dest=(0, 0))
-    return _to_bytes(canvas)
-
-
-# ---------------------------------------------------------- typography specimen
-def make_typography_tile(
-    logo_url_or_img,
-    *,
-    bg_hex: str = "#F7F5F2",
-    width: int = 1200,
-    height: int = 800,
-) -> bytes:
-    """Generate a big-letter typography specimen tile — Aa / 123 / punctuation
-    layout, centered logo below. Used as an auto-generated case-study tile."""
-    from PIL import ImageDraw, ImageFont
-
-    logo = logo_url_or_img if isinstance(logo_url_or_img, Image.Image) else _download(logo_url_or_img)
-
-    canvas = Image.new("RGB", (width, height), bg_hex)
-    draw = ImageDraw.Draw(canvas)
-
-    try:
-        font_big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 260)
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
-    except Exception:
-        font_big = ImageFont.load_default()
-        font_small = ImageFont.load_default()
-
-    draw.text((60, 60), "Aa", font=font_big, fill="#1A1A1A")
-    draw.text((width - 260, 60), "01", font=font_big, fill="#FF6B35")
-    draw.text((60, height - 90), "Poppins · Lora Italic", font=font_small, fill="#1A1A1A")
-
-    # Composite logo bottom-right
+# ---------------------------------------------------------- brand kit (flat variants only)
+def generate_logo_kit(logo: Image.Image, *, accent_hex: str = "#1A1A1A") -> dict[str, bytes]:
+    """Six flat recolor/background-swap logo variants — no warping, no
+    placement logic. Returns {filename: png_bytes}."""
     logo = logo.convert("RGBA")
-    lh = 96
-    lw = int(logo.width * (lh / logo.height))
-    logo_r = logo.resize((lw, lh), Image.LANCZOS)
-    canvas_rgba = canvas.convert("RGBA")
-    canvas_rgba.alpha_composite(logo_r, dest=(width - lw - 60, height - lh - 60))
+    black = recolor_logo(logo, "#000000")
+    white = recolor_logo(logo, "#FFFFFF")
 
-    return _to_bytes(canvas_rgba.convert("RGB"), fmt="PNG")
-
-
-# ---------------------------------------------------------- pattern tile
-def make_pattern_tile(
-    logo_url_or_img,
-    *,
-    bg_hex: str = "#1A1A1A",
-    logo_hex: str = "#FF6B35",
-    width: int = 1200,
-    height: int = 800,
-    tile_size: int = 100,
-    spacing: int = 60,
-) -> bytes:
-    """Diagonal repeat pattern with alternating rotation and generous spacing."""
-    logo_raw = logo_url_or_img if isinstance(logo_url_or_img, Image.Image) else _download(logo_url_or_img)
-    logo = recolor_logo(logo_raw, logo_hex).convert("RGBA")
-    lw = tile_size
-    lh = max(1, int(logo.height * (lw / logo.width)))
-    logo = logo.resize((lw, lh), Image.LANCZOS)
-
-    canvas = Image.new("RGB", (width, height), bg_hex).convert("RGBA")
-    step = tile_size + spacing
-    for row_idx, y in enumerate(range(-lh, height + step, step)):
-        offset = (step // 2) if row_idx % 2 else 0
-        for x in range(-lw + offset, width + step, step):
-            rotated = logo.rotate(20 if row_idx % 2 == 0 else -20, expand=True, resample=Image.BICUBIC)
-            canvas.alpha_composite(rotated, dest=(x, y))
-    return _to_bytes(canvas.convert("RGB"), fmt="PNG")
+    return {
+        "logo-black-transparent.png": _to_bytes(black),
+        "logo-white-transparent.png": _to_bytes(white),
+        "logo-black-white-bg.png": _to_bytes(flatten_on_bg(black, "#FFFFFF")),
+        "logo-white-black-bg.png": _to_bytes(flatten_on_bg(white, "#000000")),
+        "logo-color-accent-bg.png": _to_bytes(flatten_on_bg(logo, accent_hex)),
+        "logo-color-transparent.png": _to_bytes(logo),
+    }

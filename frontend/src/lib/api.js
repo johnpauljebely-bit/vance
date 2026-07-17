@@ -68,6 +68,14 @@ export const adminApi = {
   getOrder: (id) => client.get(`/admin/orders/${id}`).then((r) => r.data),
   updateOrderStatus: (id, status) =>
     client.patch(`/admin/orders/${id}/status`, { status }).then((r) => r.data),
+  updateOrderPricing: (id, quoted_price) =>
+    client.patch(`/admin/orders/${id}/pricing`, { quoted_price }).then((r) => r.data),
+  updateDeliveredLogo: (id, delivered_logo_url) =>
+    client.patch(`/admin/orders/${id}/delivered-logo`, { delivered_logo_url }).then((r) => r.data),
+  confirmPayment: (id, stage, method = "manual") =>
+    client.post(`/admin/orders/${id}/confirm-payment`, { stage, method }).then((r) => r.data),
+  sendKit: (id, payload) =>
+    client.post(`/admin/orders/${id}/send-kit`, payload).then((r) => r.data),
   getSettings: () => client.get("/admin/settings").then((r) => r.data),
   updateSettings: (patch) =>
     client.patch("/admin/settings", patch).then((r) => r.data),
@@ -97,6 +105,15 @@ export const portalApi = {
     clientClient
       .post(`/portal/orders/${id}/review`, { quote, rating })
       .then((r) => r.data),
+  createPaymentIntent: (id, stage) =>
+    clientClient
+      .post(`/portal/orders/${id}/payment/create-intent`, { stage })
+      .then((r) => r.data),
+  markPaymentRequested: (id, stage, method) =>
+    clientClient
+      .post(`/portal/orders/${id}/payment/mark-requested`, { stage, method })
+      .then((r) => r.data),
+  brandKitUrl: (id) => `${API_BASE}/portal/orders/${id}/brand-kit`,
 };
 
 export const adminMsgApi = {
@@ -110,29 +127,18 @@ export const adminMsgApi = {
 
 export const portfolioApi = {
   list: () => client.get("/admin/portfolio").then((r) => r.data),
-  create: (payload) => client.post("/admin/portfolio", payload).then((r) => r.data),
   update: (id, patch) => client.patch(`/admin/portfolio/${id}`, patch).then((r) => r.data),
   remove: (id) => client.delete(`/admin/portfolio/${id}`).then((r) => r.data),
+  publish: (payload) => client.post("/admin/portfolio/publish", payload).then((r) => r.data),
 };
 
 export const automationApi = {
   get: () => client.get("/admin/automation").then((r) => r.data),
   update: (patch) => client.patch("/admin/automation", patch).then((r) => r.data),
-  listMockups: () => client.get("/admin/mockups").then((r) => r.data),
-  showcasePrepare: (orderId, logoUrl) =>
+  watermarkPreview: (payload) =>
     client
-      .post(`/admin/orders/${orderId}/showcase/prepare`, { logo_url: logoUrl })
+      .post("/admin/watermark/preview", payload, { responseType: "blob" })
       .then((r) => r.data),
-  showcaseGenerate: (orderId, payload) =>
-    client
-      .post(`/admin/orders/${orderId}/showcase/generate`, payload)
-      .then((r) => r.data),
-  showcasePublish: (orderId, payload) =>
-    client
-      .post(`/admin/orders/${orderId}/showcase/publish`, payload)
-      .then((r) => r.data),
-  watermarkPreviewUrl: (logoUrl) =>
-    `${API_BASE}/admin/watermark/preview?logo_url=${encodeURIComponent(logoUrl)}`,
 };
 export const ORDER_STATUSES = [
   "Accepted – Awaiting Deposit",

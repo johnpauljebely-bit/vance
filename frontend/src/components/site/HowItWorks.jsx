@@ -26,8 +26,8 @@ export default function HowItWorks() {
     <section
       id="process"
       data-testid="process-section"
-      className="reveal-on-scroll bg-[#F7F5F2] py-20 md:py-32"
-      style={{ "--section-accent": "#43FD6B" }}
+      className="section-tinted-selection reveal-on-scroll bg-[#F7F5F2] py-20 md:py-32"
+      style={{ "--section-accent": "#FE0183" }}
     >
       <div className="mx-auto max-w-7xl px-6 md:px-10">
         <div className="grid grid-cols-1 gap-10 lg:grid-cols-12">

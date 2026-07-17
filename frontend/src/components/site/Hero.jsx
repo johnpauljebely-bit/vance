@@ -15,10 +15,11 @@ export default function Hero() {
   return (
     <section
       data-testid="hero-section"
-      className="relative overflow-hidden pt-14 pb-24 md:pt-20 md:pb-32"
+      className="section-tinted-selection relative overflow-hidden pt-14 pb-24 md:pt-20 md:pb-32"
+      style={{ "--section-accent": "#FF6B35" }}
     >
       <div className="pointer-events-none absolute inset-0 grain-bg opacity-40" />
-      <div className="pointer-events-none absolute -top-32 -right-32 h-[36rem] w-[36rem] rounded-full bg-[#FF6B35]/10 blur-3xl" />
+      <div className="pointer-events-none absolute -top-32 -right-32 h-[36rem] w-[36rem] rounded-full section-accent-bg opacity-10 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-40 -left-20 h-96 w-96 rounded-full bg-[#3B82F6]/8 blur-3xl" />
 
       <div className="relative mx-auto max-w-7xl px-6 md:px-10">
@@ -47,7 +48,7 @@ export default function Hero() {
               className="mt-6 text-5xl font-bold leading-[1.02] tracking-[-0.035em] md:text-6xl lg:text-7xl xl:text-[5.5rem]"
             >
               Design that actually{" "}
-              <span className="accent-italic text-[#FF6B35]">ships.</span>
+              <span className="accent-italic">ships.</span>
             </h1>
 
             <p
@@ -76,7 +77,7 @@ export default function Hero() {
             </div>
 
             <div className="dashed-quote mt-12 max-w-lg" data-testid="hero-callout">
-              <Sparkles size={18} className="inline -mt-1 mr-2 text-[#FF6B35] not-italic" />
+              <Sparkles size={18} className="inline -mt-1 mr-2 section-accent-text not-italic" />
               "One designer. One project at a time. No juniors, no outsourcing — just Vance."
             </div>
           </div>

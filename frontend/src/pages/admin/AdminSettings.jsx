@@ -2,24 +2,6 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminApi } from "@/lib/api";
 import { toast } from "sonner";
-import { X, Plus } from "lucide-react";
-import AdminPortfolioManager from "@/pages/admin/AdminPortfolioManager";
-
-function PortfolioManagerSection() {
-  return (
-    <div>
-      <div className="mb-3">
-        <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
-          Portfolio management
-        </p>
-        <p className="text-xs text-[#8A8588] mt-0.5">
-          Upload unlimited items — only the first 5 marked "on home" appear on the homepage grid. The rest live on the /work archive page.
-        </p>
-      </div>
-      <AdminPortfolioManager />
-    </div>
-  );
-}
 
 export default function AdminSettings() {
   const qc = useQueryClient();
@@ -30,14 +12,13 @@ export default function AdminSettings() {
 
   const [openSlots, setOpenSlots] = useState("");
   const [totalSlots, setTotalSlots] = useState("");
-  const [tags, setTags] = useState([]);
-  const [newTag, setNewTag] = useState("");
+  const [robuxGameLink, setRobuxGameLink] = useState("");
 
   useEffect(() => {
     if (!data) return;
     setOpenSlots(String(data.open_slots ?? 0));
     setTotalSlots(String(data.total_slots ?? 0));
-    setTags(data.portfolio_tags ?? []);
+    setRobuxGameLink(data.robux_game_link ?? "");
   }, [data]);
 
   const save = useMutation({
@@ -58,15 +39,7 @@ export default function AdminSettings() {
       toast.error("Slot values must be valid numbers");
       return;
     }
-    save.mutate({ open_slots: os, total_slots: ts, portfolio_tags: tags });
-  };
-
-  const addTag = () => {
-    const t = newTag.trim();
-    if (!t) return;
-    if (tags.includes(t)) return;
-    setTags([...tags, t]);
-    setNewTag("");
+    save.mutate({ open_slots: os, total_slots: ts, robux_game_link: robuxGameLink.trim() });
   };
 
   if (isLoading) return <p className="text-sm text-[#8A8588]">Loading…</p>;
@@ -114,63 +87,31 @@ export default function AdminSettings() {
         </div>
 
         <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6 md:p-8">
-          <h2 className="text-lg font-bold tracking-[-0.02em]">Portfolio tags</h2>
+          <h2 className="text-lg font-bold tracking-[-0.02em]">Robux payments</h2>
           <p className="mt-1 text-sm text-[#8A8588]">
-            These appear as filter tabs on the public Work grid. Only tags with at
-            least one published project show up.
+            The fixed Roblox game/experience link shown on client payment
+            screens. Your in-game dev-product system handles the actual
+            charging — this is just the link clients follow to pay.
           </p>
-
-          <div className="mt-6 flex flex-wrap gap-2" data-testid="settings-tags">
-            {tags.map((t) => (
-              <span
-                key={t}
-                className="inline-flex items-center gap-1.5 rounded-pill bg-[#F7F5F2] px-3 py-1 text-xs font-semibold"
-              >
-                {t}
-                <button
-                  type="button"
-                  onClick={() => setTags(tags.filter((x) => x !== t))}
-                  data-testid={`remove-tag-${t.replace(/\s+/g, "-").toLowerCase()}`}
-                  className="text-[#8A8588] hover:text-[#EF4444]"
-                >
-                  <X size={12} />
-                </button>
-              </span>
-            ))}
-          </div>
-
-          <div className="mt-4 flex gap-2">
+          <div className="mt-4">
+            <label className="block text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+              Game link
+            </label>
             <input
-              type="text"
-              value={newTag}
-              onChange={(e) => setNewTag(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  addTag();
-                }
-              }}
-              placeholder="Add tag…"
-              data-testid="settings-new-tag"
-              className="input-base flex-1"
+              type="url"
+              value={robuxGameLink}
+              onChange={(e) => setRobuxGameLink(e.target.value)}
+              data-testid="settings-robux-link"
+              className="input-base mt-1.5"
+              placeholder="https://www.roblox.com/games/…"
             />
-            <button
-              type="button"
-              onClick={addTag}
-              data-testid="add-tag-btn"
-              className="inline-flex items-center gap-1 rounded-pill border border-[rgba(26,26,26,0.15)] px-4 py-2 text-sm font-semibold hover:bg-[#1A1A1A] hover:text-white transition-colors"
-            >
-              <Plus size={14} /> Add
-            </button>
           </div>
         </div>
 
-        <div className="rounded-[20px] border-2 border-dashed border-[#1A1A1A]/15 p-6 text-sm text-[#8A8588] italic">
-          SMTP, watermark opacity/size, and pricing/service list configuration
-          ship in Phase 3.5 once your Gmail App Password is available.
+        <div className="rounded-[20px] border-2 border-dashed border-[#1A1A1A]/15 p-6 text-sm text-[#8A8588]">
+          Portfolio publishing, watermarking, and category tags now live under{" "}
+          <span className="font-semibold text-[#1A1A1A]">Automation → Portfolio</span>.
         </div>
-
-        <PortfolioManagerSection />
 
         <div className="flex items-center gap-3">
           <button

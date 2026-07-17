@@ -1,10 +1,14 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { adminApi, ORDER_STATUSES } from "@/lib/api";
+import { Fragment, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { adminApi, publicApi, ORDER_STATUSES } from "@/lib/api";
 import StatusPill from "@/pages/admin/_StatusPill";
+import { toast } from "sonner";
+import { ChevronDown, ChevronUp, Loader2, Upload, CheckCircle2 } from "lucide-react";
+import FileDropzone from "@/components/site/FileDropzone";
 
 export default function AdminOrders() {
   const [filter, setFilter] = useState("All");
+  const [expandedId, setExpandedId] = useState(null);
 
   const { data: orders = [], isLoading } = useQuery({
     queryKey: ["admin-orders", filter],
@@ -42,33 +46,192 @@ export default function AdminOrders() {
                 <th className="text-left px-6 py-3">Status</th>
                 <th className="text-left px-6 py-3">Payment</th>
                 <th className="text-left px-6 py-3">Updated</th>
+                <th className="w-10"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[rgba(26,26,26,0.06)]">
               {orders.map((o) => (
-                <tr
-                  key={o.id}
-                  data-testid={`order-row-${o.id}`}
-                  className="hover:bg-[#F7F5F2] transition-colors"
-                >
-                  <td className="px-6 py-4">
-                    <p className="font-semibold">{o.client_name}</p>
-                    <p className="text-xs text-[#8A8588]">{o.client_email}</p>
-                  </td>
-                  <td className="px-6 py-4 text-[#1A1A1A]/80">{o.commission_type}</td>
-                  <td className="px-6 py-4">
-                    <StatusPill status={o.status} />
-                  </td>
-                  <td className="px-6 py-4 text-[#1A1A1A]/80">
-                    {o.payment_status || "—"}
-                  </td>
-                  <td className="px-6 py-4 text-xs text-[#8A8588] tabular-nums">
-                    {new Date(o.updated_at).toLocaleDateString()}
-                  </td>
-                </tr>
+                <Fragment key={o.id}>
+                  <tr
+                    data-testid={`order-row-${o.id}`}
+                    className="hover:bg-[#F7F5F2] transition-colors cursor-pointer"
+                    onClick={() => setExpandedId(expandedId === o.id ? null : o.id)}
+                  >
+                    <td className="px-6 py-4">
+                      <p className="font-semibold">{o.client_name}</p>
+                      <p className="text-xs text-[#8A8588]">{o.client_email}</p>
+                    </td>
+                    <td className="px-6 py-4 text-[#1A1A1A]/80">{o.commission_type}</td>
+                    <td className="px-6 py-4">
+                      <StatusPill status={o.status} />
+                    </td>
+                    <td className="px-6 py-4 text-[#1A1A1A]/80">
+                      <div className="flex items-center gap-2">
+                        {o.payment_status || "—"}
+                        {o.payment_confirmation_requested && (
+                          <span className="rounded-pill bg-[#FF6B35] px-2 py-0.5 text-[10px] font-bold text-white">
+                            {o.payment_confirmation_requested.method} pending
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-6 py-4 text-xs text-[#8A8588] tabular-nums">
+                      {new Date(o.updated_at).toLocaleDateString()}
+                    </td>
+                    <td className="px-6 py-4 text-[#8A8588]">
+                      {expandedId === o.id ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    </td>
+                  </tr>
+                  {expandedId === o.id && (
+                    <tr>
+                      <td colSpan={6} className="bg-[#F7F5F2] px-6 py-5">
+                        <OrderDetailPanel order={o} />
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
               ))}
             </tbody>
           </table>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function OrderDetailPanel({ order }) {
+  const qc = useQueryClient();
+  const [price, setPrice] = useState(order.quoted_price ?? "");
+  const [logoPreview, setLogoPreview] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["admin-orders"] });
+
+  const savePrice = useMutation({
+    mutationFn: () => adminApi.updateOrderPricing(order.id, parseFloat(price)),
+    onSuccess: () => {
+      toast.success("Price saved");
+      invalidate();
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to save price"),
+  });
+
+  const setLogo = useMutation({
+    mutationFn: (url) => adminApi.updateDeliveredLogo(order.id, url),
+    onSuccess: () => {
+      toast.success("Delivered logo attached");
+      invalidate();
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to attach logo"),
+  });
+
+  const confirmPayment = useMutation({
+    mutationFn: () =>
+      adminApi.confirmPayment(
+        order.id,
+        order.payment_confirmation_requested?.stage || (order.deposit_paid ? "final" : "deposit"),
+        order.payment_confirmation_requested?.method || "manual"
+      ),
+    onSuccess: () => {
+      toast.success("Payment confirmed");
+      invalidate();
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to confirm"),
+  });
+
+  const uploadLogo = async (files) => {
+    const file = files[0];
+    if (!file) return;
+    setUploading(true);
+    setLogoPreview(URL.createObjectURL(file));
+    try {
+      const result = await publicApi.uploadReference(file);
+      setLogo.mutate(result.url);
+    } catch {
+      toast.error("Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-3 gap-5" data-testid={`order-detail-${order.id}`}>
+      <div>
+        <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+          Quoted price (USD)
+        </label>
+        <div className="mt-1.5 flex gap-2">
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={price}
+            onChange={(e) => setPrice(e.target.value)}
+            data-testid={`order-price-input-${order.id}`}
+            className="input-base"
+            placeholder="e.g. 500"
+          />
+          <button
+            type="button"
+            onClick={() => savePrice.mutate()}
+            disabled={!price || savePrice.isPending}
+            data-testid={`order-price-save-${order.id}`}
+            className="btn-secondary shrink-0 !px-4"
+          >
+            {savePrice.isPending ? <Loader2 size={14} className="animate-spin" /> : "Save"}
+          </button>
+        </div>
+        <p className="mt-1 text-[10px] text-[#8A8588]">
+          Deposit and final payment are each 50% of this.
+        </p>
+      </div>
+
+      <div>
+        <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+          Delivered logo
+        </label>
+        {order.delivered_logo_url ? (
+          <div className="mt-1.5 flex items-center gap-2 text-xs text-[#22C55E] font-semibold">
+            <CheckCircle2 size={14} /> Attached — used for Brand Kit
+          </div>
+        ) : (
+          <FileDropzone
+            testId={`order-logo-upload-${order.id}`}
+            accept="image/*"
+            onFiles={uploadLogo}
+            className="mt-1.5 flex items-center gap-2 rounded-[10px] border-2 border-dashed border-[rgba(26,26,26,0.2)] bg-white px-3 py-2.5 text-xs transition-colors hover:border-[#FF6B35]"
+            activeClassName="border-[#FF6B35]"
+          >
+            <Upload size={14} className="text-[#8A8588]" />
+            {uploading ? "Uploading…" : "Upload final logo"}
+          </FileDropzone>
+        )}
+      </div>
+
+      <div>
+        <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+          Payment
+        </label>
+        {order.payment_confirmation_requested ? (
+          <div className="mt-1.5">
+            <p className="text-xs text-[#1A1A1A]/80">
+              Client marked {order.payment_confirmation_requested.stage} paid via{" "}
+              {order.payment_confirmation_requested.method}.
+            </p>
+            <button
+              type="button"
+              onClick={() => confirmPayment.mutate()}
+              disabled={confirmPayment.isPending}
+              data-testid={`order-confirm-payment-${order.id}`}
+              className="btn-primary mt-2 !py-1.5 !px-3 text-xs"
+            >
+              {confirmPayment.isPending ? "Confirming…" : "Confirm payment"}
+            </button>
+          </div>
+        ) : (
+          <p className="mt-1.5 text-xs text-[#8A8588]">
+            Deposit: {order.deposit_paid ? "Paid" : "Pending"} · Final: {order.final_paid ? "Paid" : "Pending"}
+          </p>
         )}
       </div>
     </div>

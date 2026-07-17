@@ -4,7 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { portalApi, ORDER_STATUSES } from "@/lib/api";
 import StatusPill from "@/pages/admin/_StatusPill";
 import { toast } from "sonner";
-import { ArrowLeft, Send, Star, Loader2, MessageSquare } from "lucide-react";
+import { ArrowLeft, Send, Star, Loader2, MessageSquare, Download, Paperclip } from "lucide-react";
+import PaymentDueCard from "./PaymentDueCard";
 
 const STATUS_SEQUENCE = [
   "New",
@@ -138,16 +139,70 @@ function TabBtn({ active, onClick, testid, children }) {
 
 function OverviewTab({ order }) {
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4" data-testid="portal-overview-tab">
-      <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6">
-        <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">Brief</p>
-        <p className="mt-2 text-sm whitespace-pre-wrap leading-relaxed">{order.description}</p>
+    <div className="space-y-4" data-testid="portal-overview-tab">
+      <PaymentDueCard order={order} />
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6">
+          <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">Brief</p>
+          <p className="mt-2 text-sm whitespace-pre-wrap leading-relaxed">{order.description}</p>
+        </div>
+        <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6 space-y-4">
+          <MetaRow label="Payment" value={order.payment_status || "—"} />
+          <MetaRow label="Budget" value={order.budget || "Quote pending"} />
+          <MetaRow label="Created" value={new Date(order.created_at).toLocaleDateString()} />
+        </div>
       </div>
-      <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6 space-y-4">
-        <MetaRow label="Payment" value={order.payment_status || "—"} />
-        <MetaRow label="Budget" value={order.budget || "Quote pending"} />
-        <MetaRow label="Created" value={new Date(order.created_at).toLocaleDateString()} />
-      </div>
+
+      {order.status === "Closed" && <BrandKitCard orderId={order.id} />}
+    </div>
+  );
+}
+
+function BrandKitCard({ orderId }) {
+  const [downloading, setDownloading] = useState(false);
+
+  const download = async () => {
+    setDownloading(true);
+    try {
+      const token = localStorage.getItem("vance_client_token");
+      const res = await fetch(portalApi.brandKitUrl(orderId), {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "VanceLogo_BrandKit.zip";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      toast.error("Could not download brand kit yet");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  return (
+    <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6" data-testid="brand-kit-card">
+      <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">Brand Kit</p>
+      <h3 className="mt-1 text-lg font-bold">Your final logo files, all formats.</h3>
+      <p className="mt-2 text-sm text-[#1A1A1A]/70">
+        6 ready-to-use variants — black &amp; white, transparent, and color-on-accent — zipped up.
+      </p>
+      <button
+        type="button"
+        onClick={download}
+        disabled={downloading}
+        data-testid="download-brand-kit-btn"
+        className="btn-primary mt-4"
+      >
+        {downloading ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+        Download Brand Kit
+      </button>
     </div>
   );
 }
@@ -233,6 +288,20 @@ export function MessageBubble({ msg, me }) {
         }`}
       >
         <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
+        {(msg.attachment_file_ids || []).map((fileId) => (
+          <a
+            key={fileId}
+            href={`${process.env.REACT_APP_BACKEND_URL}/api/files/${fileId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            data-testid={`msg-attachment-${fileId}`}
+            className={`mt-2 flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-xs font-semibold underline ${
+              mine ? "bg-white/10 text-white" : "bg-[#F7F5F2] text-[#1A1A1A]"
+            }`}
+          >
+            <Paperclip size={12} /> Download attachment
+          </a>
+        ))}
         <p className={`mt-1 text-[10px] ${mine ? "text-white/50" : "text-[#8A8588]"}`}>
           {new Date(msg.created_at).toLocaleString()}
         </p>
