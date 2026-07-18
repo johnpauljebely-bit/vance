@@ -1001,11 +1001,20 @@ class MarkPaymentRequestedIn(BaseModel):
 
 @api.post("/portal/orders/{order_id}/payment/mark-requested")
 async def portal_mark_payment_requested(
-    order_id: str, payload: MarkPaymentRequestedIn, client=Depends(require_client)
+    order_id: str, payload: MarkPaymentRequestedIn, background_tasks: BackgroundTasks, client=Depends(require_client)
 ) -> dict:
     order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
     if not order:
         raise HTTPException(404, "Order not found")
+    now = now_iso()
+    activity = order.get("activity", [])
+    activity.append(
+        {
+            "at": now,
+            "note": f"Client marked {payload.stage} payment as sent via {payload.method} — awaiting confirmation",
+            "actor": "client",
+        }
+    )
     await db.orders.update_one(
         {"id": order_id},
         {
@@ -1013,13 +1022,31 @@ async def portal_mark_payment_requested(
                 "payment_confirmation_requested": {
                     "method": payload.method,
                     "stage": payload.stage,
-                    "requested_at": now_iso(),
+                    "requested_at": now,
                 },
-                "updated_at": now_iso(),
+                "status": "Awaiting Manual Payment Confirmation",
+                "updated_at": now,
+                "activity": activity,
             }
         },
     )
-    return {"ok": True}
+    msg = await _persist_message(
+        order_id,
+        "client",
+        "",
+        [],
+        kind="payment_confirmation",
+        payload={"stage": payload.stage, "method": payload.method},
+    )
+    background_tasks.add_task(
+        email_new_message,
+        to=ADMIN_EMAIL,
+        name="Vance",
+        order_id=order_id,
+        preview=f"Payment confirmation requested — {payload.method} {payload.stage}",
+        from_side="client",
+    )
+    return msg
 
 
 class ConfirmPaymentIn(BaseModel):
@@ -1116,6 +1143,34 @@ async def admin_send_message(
         if not order.get("quoted_price"):
             raise HTTPException(400, "Set a quoted price for this order before requesting payment")
         amount = round(order["quoted_price"] * 0.5, 2)
+
+        # Re-running -deposit/-final while a payment is still just "awaiting
+        # confirmation" (not yet actually confirmed) reopens the checkout —
+        # bring the order back to the pre-payment status automatically. Once
+        # the payment is genuinely confirmed (deposit_paid/final_paid),
+        # there's nothing to reopen, so this never fires past that point.
+        already_paid = order.get("deposit_paid") if stage == "deposit" else order.get("final_paid")
+        if order.get("status") == "Awaiting Manual Payment Confirmation" and not already_paid:
+            reset_status = (
+                "Accepted – Awaiting Deposit" if stage == "deposit" else "Delivered – Awaiting Final Payment"
+            )
+            now = now_iso()
+            activity = order.get("activity", [])
+            activity.append(
+                {"at": now, "note": f"Payment confirmation reset — {stage} checkout reopened", "actor": "admin"}
+            )
+            await db.orders.update_one(
+                {"id": order_id},
+                {
+                    "$set": {
+                        "status": reset_status,
+                        "payment_confirmation_requested": None,
+                        "updated_at": now,
+                        "activity": activity,
+                    }
+                },
+            )
+
         msg = await _persist_message(
             order_id, "admin", "", [], kind="payment_request", payload={"stage": stage, "amount": amount}
         )

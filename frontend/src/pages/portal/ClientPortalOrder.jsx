@@ -306,6 +306,29 @@ export function MessageBubble({ msg, me, onGoToPayment }) {
     );
   }
 
+  if (msg.kind === "payment_confirmation") {
+    const { stage, method } = msg.payload || {};
+    return (
+      <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+        <div
+          data-testid={`msg-${msg.id}`}
+          className="max-w-[80%] rounded-[16px] border-2 border-amber-400/40 bg-amber-50 p-4 shadow-sm"
+        >
+          <p className="text-[10px] font-bold uppercase tracking-widest text-amber-600">
+            Awaiting Confirmation
+          </p>
+          <p className="mt-1 text-sm font-semibold text-[#1A1A1A] capitalize">
+            {method} payment sent for {stage}
+          </p>
+          <p className="mt-1 text-xs text-[#8A8588]">Vance will confirm this shortly.</p>
+          <p className="mt-2 text-[10px] text-[#8A8588]">
+            {new Date(msg.created_at).toLocaleString()}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
       <div

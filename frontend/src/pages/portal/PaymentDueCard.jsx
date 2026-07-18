@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
-import { portalApi, publicApi } from "@/lib/api";
+import { portalApi } from "@/lib/api";
 import { toast } from "sonner";
 import { CreditCard, Gamepad2, Loader2, CheckCircle2 } from "lucide-react";
 
@@ -12,12 +12,14 @@ const stripePromise = process.env.REACT_APP_STRIPE_PUBLISHABLE_KEY
 
 const DEPOSIT_STATUS = "Accepted – Awaiting Deposit";
 const FINAL_STATUS = "Delivered – Awaiting Final Payment";
+const AWAITING_CONFIRM_STATUS = "Awaiting Manual Payment Confirmation";
 
 export default function PaymentDueCard({ order }) {
+  const pendingStage = order.status === AWAITING_CONFIRM_STATUS ? order.payment_confirmation_requested?.stage : null;
   const stage =
-    order.status === DEPOSIT_STATUS && !order.deposit_paid
+    (order.status === DEPOSIT_STATUS || pendingStage === "deposit") && !order.deposit_paid
       ? "deposit"
-      : order.status === FINAL_STATUS && !order.final_paid
+      : (order.status === FINAL_STATUS || pendingStage === "final") && !order.final_paid
       ? "final"
       : null;
 
@@ -170,16 +172,17 @@ function StripeCheckoutForm() {
   );
 }
 
+const ROBUX_PAYMENT_LINK = "https://www.roblox.com/games/121574145109643/Payments";
+
 function RobuxMethod({ orderId, stage, code }) {
   const qc = useQueryClient();
-  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: publicApi.getSettings });
   const [confirmed, setConfirmed] = useState(false);
 
-  const markPurchased = useMutation({
+  const confirmPayment = useMutation({
     mutationFn: () => portalApi.markPaymentRequested(orderId, stage, "robux"),
     onSuccess: () => {
       setConfirmed(true);
-      toast.success("Noted — Vance will confirm on Discord.");
+      toast.success("Noted — Vance will confirm shortly.");
       qc.invalidateQueries({ queryKey: ["portal-order", orderId] });
     },
     onError: (e) => toast.error(e?.response?.data?.detail || "Failed"),
@@ -194,25 +197,23 @@ function RobuxMethod({ orderId, stage, code }) {
         Enter code <span className="font-bold text-[#1A1A1A]">{code || "—"}</span>{" "}
         in-game and purchase the matching dev products.
       </p>
-      {settings?.robux_game_link && (
-        <a
-          href={settings.robux_game_link}
-          target="_blank"
-          rel="noopener noreferrer"
-          data-testid="robux-game-link"
-          className="mt-2 inline-block text-xs font-semibold underline text-[#1A1A1A]"
-        >
-          Open the game →
-        </a>
-      )}
+      <a
+        href={ROBUX_PAYMENT_LINK}
+        target="_blank"
+        rel="noopener noreferrer"
+        data-testid="robux-game-link"
+        className="btn-secondary mt-3 block w-full !py-2 text-center text-xs"
+      >
+        Pay with Robux →
+      </a>
       <button
         type="button"
-        onClick={() => markPurchased.mutate()}
-        disabled={markPurchased.isPending || confirmed}
-        data-testid="robux-purchased-btn"
-        className="btn-secondary mt-3 w-full !py-2 text-xs"
+        onClick={() => confirmPayment.mutate()}
+        disabled={confirmPayment.isPending || confirmed}
+        data-testid="robux-confirm-btn"
+        className="btn-primary mt-2 w-full !py-2 text-xs"
       >
-        {confirmed ? "Noted — awaiting confirmation" : markPurchased.isPending ? "Sending…" : "I've Purchased"}
+        {confirmed ? "Noted — awaiting confirmation" : confirmPayment.isPending ? "Sending…" : "Confirm Payment"}
       </button>
     </div>
   );
