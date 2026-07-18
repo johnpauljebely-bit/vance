@@ -1,29 +1,31 @@
-// Semantic status pills used across admin surfaces
-const MAP = {
+// Semantic status pills used across admin surfaces — each stage gets its
+// own distinct color so the pipeline is scannable at a glance, not just
+// reused green/red/blue semantics.
+export const STATUS_COLOR_MAP = {
   New: { bg: "#3B82F6", label: "New" },
-  Declined: { bg: "#EF4444", label: "Declined" },
-  "Accepted – Awaiting Deposit": { bg: "#F59E0B", label: "Awaiting Deposit" },
-  "Awaiting Manual Payment Confirmation": {
-    bg: "#F59E0B",
-    label: "Awaiting Payment",
-  },
-  "In Queue": { bg: "#8A8588", label: "In Queue" },
-  Sketching: { bg: "#3B82F6", label: "Sketching" },
-  "Final Review": { bg: "#8B5CF6", label: "Final Review" },
+  "Accepted – Awaiting Deposit": { bg: "#F97316", label: "Awaiting Deposit" },
+  "In Queue": { bg: "#A855F7", label: "In Queue" },
+  Sketching: { bg: "#6366F1", label: "Sketching" },
+  "Final Review": { bg: "#14B8A6", label: "Final Review" },
   "Delivered – Awaiting Final Payment": {
-    bg: "#F59E0B",
+    bg: "#EA580C",
     label: "Awaiting Final $",
   },
   "Delivered – Awaiting Review": {
-    bg: "#22C55E",
+    bg: "#CA8A04",
     label: "Awaiting Review",
   },
-  Closed: { bg: "#1A1A1A", label: "Closed" },
+  Closed: { bg: "#22C55E", label: "Closed" },
+  Declined: { bg: "#EF4444", label: "Declined" },
+  "Awaiting Manual Payment Confirmation": {
+    bg: "#6B7280",
+    label: "Awaiting Payment",
+  },
   "Awaiting Response": { bg: "#F59E0B", label: "Awaiting" },
 };
 
 export default function StatusPill({ status, className = "" }) {
-  const meta = MAP[status] || { bg: "#8A8588", label: status || "—" };
+  const meta = STATUS_COLOR_MAP[status] || { bg: "#8A8588", label: status || "—" };
   return (
     <span
       data-testid={`status-pill-${(status || "unknown").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}`}

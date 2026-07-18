@@ -116,7 +116,7 @@ function PortfolioTile({ item, index }) {
         <img
           src={cover.startsWith("/api") ? `${process.env.REACT_APP_BACKEND_URL}${cover}` : cover}
           alt={item.title}
-          className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
+          className="h-full w-full object-contain transition-transform duration-500 group-hover:scale-[1.02]"
           draggable={false}
         />
       )}

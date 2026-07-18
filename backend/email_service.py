@@ -66,11 +66,7 @@ def _get_access_token() -> Optional[str]:
         logger.error("Gmail token refresh failed: %s", exc)
         return None
 
-VANCE_LOGO_WHITE = (
-    "https://customer-assets-lxgj4vgw.emergentagent.net/"
-    "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/"
-    "jlsm9cq4_Untitled%20design%20%285%29.png"
-)
+VANCE_LOGO_WHITE = "https://vance-7x9s.onrender.com/api/files/brand-logo-white"
 
 _DISCLAIMER = (
     "This email was sent automatically. Replies to this address are not "
@@ -369,7 +365,7 @@ def email_order_status_update(*, to: str, name: str, order_id: str, status: str)
 
 
 def email_payment_request(*, to: str, name: str, order_id: str, stage: str, amount: float) -> None:
-    stage_label = "deposit" if stage == "deposit" else "final payment"
+    stage_label = {"deposit": "deposit", "final": "final payment", "full": "full payment"}.get(stage, stage)
     body = f"""
       <p>Hey {name},</p>
       <p>Just a friendly reminder — your <strong>{stage_label}</strong> of

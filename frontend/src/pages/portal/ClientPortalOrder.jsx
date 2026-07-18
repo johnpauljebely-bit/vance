@@ -84,11 +84,23 @@ export default function ClientPortalOrder() {
         className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-5 md:p-6"
       >
         <div className="relative">
-          <div className="absolute inset-x-0 top-3 h-0.5 bg-[#1A1A1A]/10 rounded" />
+          {/* Each dot is centered within its own 1/n-width flex slot, so its
+              true center sits at (i+0.5)/n of the row — not i/(n-1). The
+              line has to start/end at that same offset (half a slot in from
+              each edge) or it visually overshoots past the end dots and the
+              orange progress never lines up under the current dot. */}
           <div
-            className="absolute top-3 left-0 h-0.5 bg-[#FF6B35] rounded transition-all duration-500 ease-in-out"
+            className="absolute top-3 h-0.5 bg-[#1A1A1A]/10 rounded"
             style={{
-              width: `${Math.max(0, (currentIdx / (STATUS_SEQUENCE.length - 1)) * 100)}%`,
+              left: `${(50 / STATUS_SEQUENCE.length)}%`,
+              right: `${(50 / STATUS_SEQUENCE.length)}%`,
+            }}
+          />
+          <div
+            className="absolute top-3 h-0.5 bg-[#FF6B35] rounded transition-all duration-500 ease-in-out"
+            style={{
+              left: `${(50 / STATUS_SEQUENCE.length)}%`,
+              width: `${Math.max(0, (currentIdx / STATUS_SEQUENCE.length) * 100)}%`,
             }}
           />
           <ol className="relative flex justify-between">
@@ -274,7 +286,7 @@ export function MessageBubble({ msg, me, onGoToPayment }) {
 
   if (msg.kind === "payment_request") {
     const { stage, amount } = msg.payload || {};
-    const label = stage === "final" ? "Pay Final Balance" : "Pay Deposit";
+    const label = stage === "final" ? "Pay Final Balance" : stage === "full" ? "Pay Full Amount" : "Pay Deposit";
     return (
       <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
         <div

@@ -1,10 +1,10 @@
 import { useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { loadStripe } from "@stripe/stripe-js";
 import { Elements, PaymentElement, useStripe, useElements } from "@stripe/react-stripe-js";
-import { portalApi } from "@/lib/api";
+import { portalApi, publicApi } from "@/lib/api";
 import { toast } from "sonner";
-import { CreditCard, Gamepad2, Loader2, CheckCircle2 } from "lucide-react";
+import { CreditCard, Gamepad2, Landmark, Loader2, CheckCircle2 } from "lucide-react";
 
 const stripePromise = process.env.REACT_APP_STRIPE_PUBLISHABLE_KEY
   ? loadStripe(process.env.REACT_APP_STRIPE_PUBLISHABLE_KEY)
@@ -36,7 +36,8 @@ export default function PaymentDueCard({ order }) {
     );
   }
 
-  const amount = order.quoted_price * 0.5;
+  const fullPayment = stage === "deposit" && order.full_payment_requested;
+  const amount = order.quoted_price * (fullPayment ? 1 : 0.5);
 
   if (order.payment_confirmation_requested) {
     return (
@@ -59,7 +60,7 @@ export default function PaymentDueCard({ order }) {
   return (
     <div id="payment-due" className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6 scroll-mt-6" data-testid="payment-due-card">
       <p className="text-xs font-bold uppercase tracking-widest text-[#FF6B35]">
-        Payment due — {stage === "deposit" ? "50% deposit" : "50% final payment"}
+        Payment due — {fullPayment ? "full payment" : stage === "deposit" ? "50% deposit" : "50% final payment"}
       </p>
       <h3 className="mt-1 text-2xl font-bold tracking-[-0.02em]">
         ${amount.toFixed(2)} USD
@@ -67,6 +68,7 @@ export default function PaymentDueCard({ order }) {
 
       <div className="mt-5 space-y-3">
         <StripeMethod orderId={order.id} stage={stage} />
+        <InteracMethod orderId={order.id} stage={stage} amount={amount} />
         <RobuxMethod orderId={order.id} stage={stage} code={order.unique_payment_code} />
       </div>
     </div>
@@ -169,6 +171,44 @@ function StripeCheckoutForm() {
         {submitting ? <><Loader2 size={14} className="animate-spin" /> Processing…</> : "Confirm payment"}
       </button>
     </form>
+  );
+}
+
+function InteracMethod({ orderId, stage, amount }) {
+  const qc = useQueryClient();
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: publicApi.getSettings });
+  const [confirmed, setConfirmed] = useState(false);
+
+  const confirmPayment = useMutation({
+    mutationFn: () => portalApi.markPaymentRequested(orderId, stage, "interac"),
+    onSuccess: () => {
+      setConfirmed(true);
+      toast.success("Noted — Vance will confirm shortly.");
+      qc.invalidateQueries({ queryKey: ["portal-order", orderId] });
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed"),
+  });
+
+  return (
+    <div className="rounded-[14px] border border-[rgba(26,26,26,0.1)] p-4" data-testid="payment-method-interac">
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        <Landmark size={16} /> Interac e-Transfer
+      </div>
+      <p className="mt-2 text-xs text-[#1A1A1A]/70">
+        Send <span className="font-bold text-[#1A1A1A]">${amount.toFixed(2)} USD</span> to{" "}
+        <span className="font-bold text-[#1A1A1A]">{settings?.interac_email || "—"}</span> via Interac e-Transfer
+        (Canada only), then confirm below.
+      </p>
+      <button
+        type="button"
+        onClick={() => confirmPayment.mutate()}
+        disabled={confirmPayment.isPending || confirmed}
+        data-testid="interac-confirm-btn"
+        className="btn-primary mt-3 w-full !py-2 text-xs"
+      >
+        {confirmed ? "Noted — awaiting confirmation" : confirmPayment.isPending ? "Sending…" : "Confirm Payment"}
+      </button>
+    </div>
   );
 }
 

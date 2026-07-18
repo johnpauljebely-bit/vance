@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from typing import Optional
 
 import numpy as np
@@ -20,15 +21,15 @@ from PIL import Image, ImageEnhance
 logger = logging.getLogger("vance.image")
 
 # Vance's own brand mark — used as the corner-watermark stamp on portfolio
-# photos (not the client's project logo).
-BRAND_LOGO_BLACK_URL = (
-    "https://customer-assets-lxgj4vgw.emergentagent.net/"
-    "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/2nhu3pin_Untitled%20design%20%284%29.png"
-)
-BRAND_LOGO_WHITE_URL = (
-    "https://customer-assets-lxgj4vgw.emergentagent.net/"
-    "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/jlsm9cq4_Untitled%20design%20%285%29.png"
-)
+# photos (not the client's project logo). Loaded straight from the bundled
+# asset files rather than fetched over HTTP, so it works identically in
+# every environment with no network round-trip back to our own backend.
+_ASSETS_DIR = os.path.join(os.path.dirname(__file__), "assets")
+
+
+def load_local_asset(filename: str) -> Image.Image:
+    with open(os.path.join(_ASSETS_DIR, filename), "rb") as f:
+        return Image.open(io.BytesIO(f.read())).convert("RGBA")
 
 
 def _download(url: str) -> Image.Image:
@@ -146,19 +147,25 @@ def apply_corner_watermark(
     original_url_or_img,
     *,
     corner: str = "bottom-right",
-    scale_pct: float = 0.14,
+    scale_pct: float = 0.09,
     padding_pct: float = 0.035,
-    logo_black_url: str = BRAND_LOGO_BLACK_URL,
-    logo_white_url: str = BRAND_LOGO_WHITE_URL,
+    opacity: float = 0.7,
 ) -> bytes:
     """Auto-detect corner brightness and stamp the contrasting brand logo
-    (white on dark, black on light) as a small corner badge. No warping,
-    no complex placement — a simple flat overlay."""
+    (white on dark, black on light) as a small, subtle corner badge — not
+    fully opaque, so it reads as a brand mark rather than a dominant
+    element. No warping, no complex placement — a simple flat overlay."""
     base = original_url_or_img if isinstance(original_url_or_img, Image.Image) else _download(original_url_or_img)
     base = base.convert("RGBA")
 
     dark = _region_is_dark(base, corner=corner)
-    logo = _download(logo_white_url if dark else logo_black_url).convert("RGBA")
+    logo = load_local_asset("logo-white.png" if dark else "logo-black.png")
+
+    if opacity < 1.0:
+        alpha = logo.split()[3]
+        alpha = ImageEnhance.Brightness(alpha).enhance(opacity)
+        logo = logo.copy()
+        logo.putalpha(alpha)
 
     target_w = max(1, int(base.width * scale_pct))
     ratio = target_w / logo.width
@@ -182,8 +189,10 @@ def apply_corner_watermark(
 
 
 # ---------------------------------------------------------- brand kit (flat variants only)
-def generate_logo_kit(logo: Image.Image, *, accent_hex: str = "#1A1A1A") -> dict[str, bytes]:
-    """Six flat recolor/background-swap logo variants — no warping, no
+def generate_logo_kit(
+    logo: Image.Image, *, dark_accent_hex: str = "#1A1A1A", light_accent_hex: str = "#FFFFFF"
+) -> dict[str, bytes]:
+    """Seven flat recolor/background-swap logo variants — no warping, no
     placement logic. Returns {filename: png_bytes}."""
     logo = logo.convert("RGBA")
     black = recolor_logo(logo, "#000000")
@@ -194,6 +203,7 @@ def generate_logo_kit(logo: Image.Image, *, accent_hex: str = "#1A1A1A") -> dict
         "logo-white-transparent.png": _to_bytes(white),
         "logo-black-white-bg.png": _to_bytes(flatten_on_bg(black, "#FFFFFF")),
         "logo-white-black-bg.png": _to_bytes(flatten_on_bg(white, "#000000")),
-        "logo-color-accent-bg.png": _to_bytes(flatten_on_bg(logo, accent_hex)),
+        "logo-color-dark-accent-bg.png": _to_bytes(flatten_on_bg(logo, dark_accent_hex)),
+        "logo-color-light-accent-bg.png": _to_bytes(flatten_on_bg(logo, light_accent_hex)),
         "logo-color-transparent.png": _to_bytes(logo),
     }

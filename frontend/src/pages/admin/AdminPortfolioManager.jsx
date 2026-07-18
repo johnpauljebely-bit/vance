@@ -56,7 +56,7 @@ export default function AdminPortfolioManager() {
                   ? `${process.env.REACT_APP_BACKEND_URL}${it.cover_image_url}`
                   : it.cover_image_url}
                 alt={it.title}
-                className="h-full w-full object-cover"
+                className="h-full w-full object-contain"
               />
             </div>
             <div className="p-3 space-y-2">

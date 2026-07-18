@@ -18,6 +18,7 @@ import {
   Calendar,
   FilesIcon,
   BarChart3,
+  Users,
   Settings,
   LogOut,
   Menu,
@@ -30,12 +31,13 @@ const NAV = [
   { to: "/admin/requests", label: "Requests", icon: Inbox, n: "02" },
   { to: "/admin/orders", label: "Orders", icon: Package, n: "03" },
   { to: "/admin/messages", label: "Messages", icon: MessagesSquare, n: "04" },
-  { to: "/admin/taskboard", label: "Task Board", icon: KanbanSquare, n: "05" },
-  { to: "/admin/automation", label: "Automation", icon: Wand2, n: "06" },
-  { to: "/admin/calendar", label: "Calendar", icon: Calendar, n: "07" },
-  { to: "/admin/templates", label: "Templates", icon: FilesIcon, n: "08" },
-  { to: "/admin/analytics", label: "Analytics", icon: BarChart3, n: "09" },
-  { to: "/admin/settings", label: "Settings", icon: Settings, n: "10" },
+  { to: "/admin/clients", label: "Clients", icon: Users, n: "05" },
+  { to: "/admin/taskboard", label: "Task Board", icon: KanbanSquare, n: "06" },
+  { to: "/admin/automation", label: "Automation", icon: Wand2, n: "07" },
+  { to: "/admin/calendar", label: "Calendar", icon: Calendar, n: "08" },
+  { to: "/admin/templates", label: "Templates", icon: FilesIcon, n: "09" },
+  { to: "/admin/analytics", label: "Analytics", icon: BarChart3, n: "10" },
+  { to: "/admin/settings", label: "Settings", icon: Settings, n: "11" },
 ];
 
 export default function AdminLayout() {

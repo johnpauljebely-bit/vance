@@ -17,6 +17,11 @@ import AdminOrders from "@/pages/admin/AdminOrders";
 import AdminMessages from "@/pages/admin/AdminMessages";
 import AdminTaskBoard from "@/pages/admin/AdminTaskBoard";
 import AdminAutomation from "@/pages/admin/AdminAutomation";
+import AdminTemplates from "@/pages/admin/AdminTemplates";
+import AdminCalendar from "@/pages/admin/AdminCalendar";
+import AdminAnalytics from "@/pages/admin/AdminAnalytics";
+import AdminClients from "@/pages/admin/AdminClients";
+import AdminClientDetail from "@/pages/admin/AdminClientDetail";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import AdminPlaceholder from "@/pages/admin/AdminPlaceholder";
 import SmoothScroll from "@/lib/SmoothScroll";
@@ -47,42 +52,13 @@ function App() {
             <Route path="requests" element={<AdminRequests />} />
             <Route path="orders" element={<AdminOrders />} />
             <Route path="messages" element={<AdminMessages />} />
+            <Route path="clients" element={<AdminClients />} />
+            <Route path="clients/:email" element={<AdminClientDetail />} />
             <Route path="taskboard" element={<AdminTaskBoard />} />
             <Route path="automation" element={<AdminAutomation />} />
-            <Route
-              path="calendar"
-              element={
-                <AdminPlaceholder
-                  title="Calendar / Queue"
-                  slug="calendar"
-                  section="06"
-                  copy="Timeline view of upcoming deadlines across every active order."
-                  phase="Ships alongside Task Board polish"
-                />
-              }
-            />
-            <Route
-              path="templates"
-              element={
-                <AdminPlaceholder
-                  title="Templates"
-                  section="07"
-                  copy="Canned messages: Accept, Decline, Need more info, Deposit reminder, Delivery ready."
-                  phase="Ships in a subsequent iteration"
-                />
-              }
-            />
-            <Route
-              path="analytics"
-              element={
-                <AdminPlaceholder
-                  title="Analytics"
-                  section="08"
-                  copy="Monthly revenue, accept/decline rate, avg turnaround, repeat client rate."
-                  phase="Ships after Payments (Phase 4)"
-                />
-              }
-            />
+            <Route path="calendar" element={<AdminCalendar />} />
+            <Route path="templates" element={<AdminTemplates />} />
+            <Route path="analytics" element={<AdminAnalytics />} />
             <Route path="settings" element={<AdminSettings />} />
           </Route>
 

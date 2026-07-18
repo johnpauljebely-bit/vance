@@ -104,6 +104,9 @@ function OrderDetailPanel({ order }) {
   const [price, setPrice] = useState(order.quoted_price ?? "");
   const [logoPreview, setLogoPreview] = useState(null);
   const [uploading, setUploading] = useState(false);
+  const [darkAccent, setDarkAccent] = useState(order.accent_color_dark ?? "");
+  const [lightAccent, setLightAccent] = useState(order.accent_color_light ?? "");
+  const [deadline, setDeadline] = useState(order.deadline ?? "");
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["admin-orders"] });
 
@@ -132,6 +135,24 @@ function OrderDetailPanel({ order }) {
       invalidate();
     },
     onError: (e) => toast.error(e?.response?.data?.detail || "Failed to attach logo"),
+  });
+
+  const saveDeadline = useMutation({
+    mutationFn: () => adminApi.updateDeadline(order.id, deadline || null),
+    onSuccess: () => {
+      toast.success("Deadline saved");
+      invalidate();
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to save deadline"),
+  });
+
+  const saveAccentColors = useMutation({
+    mutationFn: () => adminApi.updateAccentColors(order.id, darkAccent.trim() || null, lightAccent.trim() || null),
+    onSuccess: () => {
+      toast.success("Accent colors saved");
+      invalidate();
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to save accent colors"),
   });
 
   const confirmPayment = useMutation({
@@ -223,6 +244,31 @@ function OrderDetailPanel({ order }) {
 
       <div>
         <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+          Deadline
+        </label>
+        <div className="mt-1.5 flex gap-2">
+          <input
+            type="date"
+            value={deadline}
+            onChange={(e) => setDeadline(e.target.value)}
+            data-testid={`order-deadline-input-${order.id}`}
+            className="input-base"
+          />
+          <button
+            type="button"
+            onClick={() => saveDeadline.mutate()}
+            disabled={saveDeadline.isPending}
+            data-testid={`order-deadline-save-${order.id}`}
+            className="btn-secondary shrink-0 !px-4"
+          >
+            {saveDeadline.isPending ? <Loader2 size={14} className="animate-spin" /> : "Save"}
+          </button>
+        </div>
+        <p className="mt-1 text-[10px] text-[#8A8588]">Shows up on the Calendar tab, color-coded by urgency.</p>
+      </div>
+
+      <div>
+        <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
           Delivered logo
         </label>
         {order.delivered_logo_url ? (
@@ -241,6 +287,44 @@ function OrderDetailPanel({ order }) {
             {uploading ? "Uploading…" : "Upload final logo"}
           </FileDropzone>
         )}
+      </div>
+
+      <div>
+        <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+          Brand kit accent colors
+        </label>
+        <div className="mt-1.5 flex gap-2">
+          <div className="flex items-center gap-1.5">
+            <input
+              type="color"
+              value={darkAccent || "#1A1A1A"}
+              onChange={(e) => setDarkAccent(e.target.value)}
+              data-testid={`order-accent-dark-${order.id}`}
+              className="h-9 w-9 shrink-0 cursor-pointer rounded-[8px] border border-[rgba(26,26,26,0.15)]"
+              title="Dark accent"
+            />
+            <input
+              type="color"
+              value={lightAccent || "#FFFFFF"}
+              onChange={(e) => setLightAccent(e.target.value)}
+              data-testid={`order-accent-light-${order.id}`}
+              className="h-9 w-9 shrink-0 cursor-pointer rounded-[8px] border border-[rgba(26,26,26,0.15)]"
+              title="Light accent"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => saveAccentColors.mutate()}
+            disabled={saveAccentColors.isPending}
+            data-testid={`order-accent-save-${order.id}`}
+            className="btn-secondary shrink-0 !px-3 text-xs"
+          >
+            {saveAccentColors.isPending ? <Loader2 size={14} className="animate-spin" /> : "Save"}
+          </button>
+        </div>
+        <p className="mt-1 text-[10px] text-[#8A8588]">
+          Used for the dark/light-background logo variants in the Brand Kit.
+        </p>
       </div>
 
       <div>

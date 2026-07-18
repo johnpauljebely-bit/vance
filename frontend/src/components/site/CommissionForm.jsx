@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { publicApi } from "@/lib/api";
 import {
   Select,
@@ -16,6 +17,7 @@ const MAX_FILES = 4;
 const MAX_SIZE_MB = 10;
 
 export default function CommissionForm() {
+  const { data: settings } = useQuery({ queryKey: ["settings"], queryFn: publicApi.getSettings });
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [commissionType, setCommissionType] = useState("Logo Design");
@@ -181,6 +183,15 @@ export default function CommissionForm() {
             estimate will be.
           </p>
         </div>
+
+        {settings && settings.business_open === false && (
+          <div
+            data-testid="commission-form-closed-banner"
+            className="mt-8 rounded-[16px] border-2 border-[#F59E0B]/30 bg-[#F59E0B]/10 px-5 py-4 text-center text-sm font-semibold text-[#1A1A1A]"
+          >
+            {settings.away_message || "Currently not taking new commissions — check back soon."}
+          </div>
+        )}
 
         <form
           onSubmit={onSubmit}

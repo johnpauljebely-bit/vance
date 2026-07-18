@@ -72,6 +72,12 @@ export const adminApi = {
     client.patch(`/admin/orders/${id}/pricing`, { quoted_price }).then((r) => r.data),
   updateDeliveredLogo: (id, delivered_logo_url) =>
     client.patch(`/admin/orders/${id}/delivered-logo`, { delivered_logo_url }).then((r) => r.data),
+  updateAccentColors: (id, accent_color_dark, accent_color_light) =>
+    client
+      .patch(`/admin/orders/${id}/accent-colors`, { accent_color_dark, accent_color_light })
+      .then((r) => r.data),
+  updateDeadline: (id, deadline) =>
+    client.patch(`/admin/orders/${id}/deadline`, { deadline }).then((r) => r.data),
   confirmPayment: (id, stage, method = "manual") =>
     client.post(`/admin/orders/${id}/confirm-payment`, { stage, method }).then((r) => r.data),
   sendKit: (id, payload) =>
@@ -79,6 +85,35 @@ export const adminApi = {
   getSettings: () => client.get("/admin/settings").then((r) => r.data),
   updateSettings: (patch) =>
     client.patch("/admin/settings", patch).then((r) => r.data),
+};
+
+export const clientsApi = {
+  list: () => client.get("/admin/clients").then((r) => r.data),
+  get: (email) => client.get(`/admin/clients/${encodeURIComponent(email)}`).then((r) => r.data),
+  updateNotes: (email, notes) =>
+    client.patch(`/admin/clients/${encodeURIComponent(email)}/notes`, { notes }).then((r) => r.data),
+  updateNotificationOverrides: (email, overrides) =>
+    client
+      .patch(`/admin/clients/${encodeURIComponent(email)}/notification-overrides`, overrides)
+      .then((r) => r.data),
+};
+
+export const analyticsApi = {
+  get: () => client.get("/admin/analytics").then((r) => r.data),
+};
+
+export const calendarApi = {
+  get: () => client.get("/admin/calendar").then((r) => r.data),
+  createEvent: (payload) => client.post("/admin/calendar-events", payload).then((r) => r.data),
+  updateEvent: (id, patch) => client.patch(`/admin/calendar-events/${id}`, patch).then((r) => r.data),
+  removeEvent: (id) => client.delete(`/admin/calendar-events/${id}`).then((r) => r.data),
+};
+
+export const templatesApi = {
+  list: () => client.get("/admin/templates").then((r) => r.data),
+  create: (payload) => client.post("/admin/templates", payload).then((r) => r.data),
+  update: (id, patch) => client.patch(`/admin/templates/${id}`, patch).then((r) => r.data),
+  remove: (id) => client.delete(`/admin/templates/${id}`).then((r) => r.data),
 };
 
 // Client portal + admin messages/portfolio/automation clients — separate token key

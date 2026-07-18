@@ -70,6 +70,7 @@ from image_service import (
     apply_watermark_layers,
     dominant_color_hex,
     generate_logo_kit,
+    load_local_asset,
     recolor_logo,
 )
 from PIL import Image
@@ -80,6 +81,8 @@ import secrets
 MONGO_URL = os.environ["MONGO_URL"]
 DB_NAME = os.environ["DB_NAME"]
 APP_NAME = os.environ.get("APP_NAME", "vance")
+BRAND_LOGO_WHITE_ID = "brand-logo-white"
+BRAND_LOGO_BLACK_ID = "brand-logo-black"
 JWT_SECRET = os.environ.get("JWT_SECRET", "dev-secret")
 JWT_EXPIRES_MIN = int(os.environ.get("JWT_EXPIRES_MINUTES", "1440"))
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@vance.design")
@@ -183,7 +186,9 @@ class PublicSettings(BaseModel):
     total_slots: int
     portfolio_tags: List[str]
     last_content_updated: str
-    robux_game_link: Optional[str] = None
+    interac_email: Optional[str] = None
+    business_open: bool = True
+    away_message: Optional[str] = None
 
 
 class AdminLoginIn(BaseModel):
@@ -306,10 +311,83 @@ async def on_startup() -> None:
                 "total_slots": 3,
                 "portfolio_tags": ["Logo", "Brand Identity", "Social Kit"],
                 "last_content_updated": now_iso(),
+                "business_open": True,
+                "away_message": None,
+                "default_revision_count": 2,
+                "timezone": "America/Vancouver",
+                "notify_new_message": True,
+                "notify_status_update": True,
+                "notify_payment_request": True,
             }
         )
         logger.info("Seeded default settings")
 
+    # Ensure starter quick-reply templates exist (only ever seeded once —
+    # admin can freely edit/delete after that without them coming back).
+    if await db.templates.count_documents({}) == 0:
+        starter_templates = [
+            ("Accept confirmation",
+             "Excited to bring your vision to life! I've accepted your commission — next step is a 50% deposit to get started. You'll find the payment options in your Client Portal."),
+            ("Decline (polite)",
+             "Thanks so much for reaching out! Unfortunately I'm not able to take this project on right now — my queue is full. Feel free to check back later or reach out again down the line."),
+            ("Need more info / clarification",
+             "Thanks for the request! Before I can put together an accurate quote, I need a bit more detail — could you share some reference images or examples of the style you're going for?"),
+            ("Deposit reminder",
+             "Just a friendly nudge — your 50% deposit is still outstanding. Once it's in, I'll get your project queued up right away!"),
+            ("Payment reminder (final)",
+             "Your project is ready to go — just need the remaining balance to release the final files. You can pay anytime from your Client Portal."),
+            ("Delivery ready",
+             "Your design is ready! Head to your Client Portal to check it out and download everything."),
+            ("Revision received",
+             "Got your revision notes, thank you! I'll get started on these changes and update you here once they're ready to review."),
+            ("Revision denied (scope/limit reached)",
+             "This request falls outside the revisions included in your package. I'm happy to make this change as a paid add-on — let me know if you'd like to move forward, or reach out if you have questions."),
+            ("Order paused notice",
+             "Quick heads up — I'm pausing work on this project for now. I'll follow up here as soon as we're ready to pick things back up."),
+            ("Thank you / review request follow-up",
+             "Thanks again for trusting me with your brand — it's been a pleasure working on this one! If you have a minute, I'd really appreciate a quick review in your Client Portal."),
+        ]
+        now = now_iso()
+        await db.templates.insert_many(
+            [
+                {"id": str(uuid.uuid4()), "title": title, "body": body, "created_at": now, "updated_at": now}
+                for title, body in starter_templates
+            ]
+        )
+        logger.info("Seeded %d starter templates", len(starter_templates))
+
+    # Seed the brand logo files (bundled in backend/assets) into object
+    # storage under fixed ids, so BRAND_LOGO_WHITE_URL/BRAND_LOGO_BLACK_URL
+    # resolve on first boot without any manual upload step — same pattern
+    # as the settings/templates seeds above, just backed by a local file
+    # instead of inline data.
+    assets_dir = os.path.join(os.path.dirname(__file__), "assets")
+    for file_id, filename, storage_name in (
+        (BRAND_LOGO_WHITE_ID, "logo-white.png", "logo-white.png"),
+        (BRAND_LOGO_BLACK_ID, "logo-black.png", "logo-black.png"),
+    ):
+        if await db.files.find_one({"id": file_id}):
+            continue
+        local_path = os.path.join(assets_dir, filename)
+        if not os.path.exists(local_path):
+            continue
+        with open(local_path, "rb") as f:
+            data = f.read()
+        storage_path = f"{APP_NAME}/brand/{storage_name}"
+        put_object(storage_path, data, "image/png")
+        await db.files.insert_one(
+            {
+                "id": file_id,
+                "storage_path": storage_path,
+                "original_filename": filename,
+                "content_type": "image/png",
+                "size": len(data),
+                "kind": "brand-logo",
+                "created_at": now_iso(),
+                "is_deleted": False,
+            }
+        )
+        logger.info("Seeded brand logo %s", filename)
 
 
 @app.on_event("shutdown")
@@ -323,6 +401,31 @@ async def health() -> dict:
     return {"ok": True, "storage": _storage_key is not None, "time": now_iso()}
 
 
+async def _notifications_enabled(key: str, client_email: Optional[str] = None) -> bool:
+    """Per-client override takes precedence over the global setting — lets
+    admin mute a specific noisy client without turning an email type off
+    for everyone. Only meaningful for emails actually sent to a client;
+    admin-facing notifications (e.g. "client sent a message") always use
+    the global setting since there's no per-client concept for those."""
+    if client_email:
+        note = await db.client_notes.find_one({"email": client_email.lower()})
+        if note:
+            override = (note.get("notification_overrides") or {}).get(key)
+            if override is not None:
+                return override
+    doc = await db.settings.find_one({"_id": "singleton"}, {key: 1})
+    return doc.get(key, True) if doc else True
+
+
+async def _log_email(to: str, subject: str, order_id: Optional[str] = None) -> None:
+    """Lightweight send audit trail — powers the Clients tab's 'emails sent'
+    stat. Written alongside (not inside) the actual send, so it records the
+    attempt regardless of whether the send itself succeeds or falls back."""
+    await db.email_log.insert_one(
+        {"id": str(uuid.uuid4()), "to": to, "subject": subject, "order_id": order_id, "sent_at": now_iso()}
+    )
+
+
 # ------------------------------------------------------------------ settings (public)
 @api.get("/settings/public", response_model=PublicSettings)
 async def get_public_settings() -> PublicSettings:
@@ -334,7 +437,9 @@ async def get_public_settings() -> PublicSettings:
         total_slots=int(doc.get("total_slots", 0)),
         portfolio_tags=doc.get("portfolio_tags", []),
         last_content_updated=doc.get("last_content_updated", now_iso()),
-        robux_game_link=doc.get("robux_game_link"),
+        interac_email=doc.get("interac_email") or ADMIN_EMAIL,
+        business_open=doc.get("business_open", True),
+        away_message=doc.get("away_message"),
     )
 
 
@@ -523,6 +628,10 @@ async def admin_accept_request(
         "deposit_paid": False,
         "final_paid": False,
         "delivered_logo_url": None,
+        "accent_color_dark": None,
+        "accent_color_light": None,
+        "full_payment_requested": False,
+        "deadline": None,
         "unique_payment_code": f"VC-{uuid.uuid4().hex[:6].upper()}",
         "revision_count": 0,
         "activity": [
@@ -534,6 +643,7 @@ async def admin_accept_request(
     }
     await db.orders.insert_one(order)
     background_tasks.add_task(email_request_accepted, to=req["email"], name=req["name"], order_id=order_id)
+    background_tasks.add_task(_log_email, to=req["email"], subject="Commission Accepted", order_id=order_id)
     logger.info("Request %s accepted → order %s created", request_id, order_id)
     return {"ok": True, "order_id": order_id}
 
@@ -560,6 +670,7 @@ async def admin_decline_request(
     background_tasks.add_task(
         email_request_declined, to=req["email"], name=req["name"], reason=payload.reason or None
     )
+    background_tasks.add_task(_log_email, to=req["email"], subject="Commission Update (Declined)")
     logger.info("Request %s declined", request_id)
     return {"ok": True}
 
@@ -638,6 +749,7 @@ async def admin_update_order_status(
         background_tasks.add_task(
             email_deposit_confirmed, to=order["client_email"], name=order["client_name"], order_id=order_id
         )
+        background_tasks.add_task(_log_email, to=order["client_email"], subject="Deposit Received", order_id=order_id)
     elif payload.status in ("Delivered – Awaiting Final Payment", "Delivered – Awaiting Review"):
         background_tasks.add_task(
             email_order_delivered, to=order["client_email"], name=order["client_name"], order_id=order_id
@@ -645,13 +757,18 @@ async def admin_update_order_status(
         background_tasks.add_task(
             email_review_request, to=order["client_email"], name=order["client_name"], order_id=order_id
         )
-    else:
+        background_tasks.add_task(_log_email, to=order["client_email"], subject="Design Delivered", order_id=order_id)
+        background_tasks.add_task(_log_email, to=order["client_email"], subject="Leave a Review", order_id=order_id)
+    elif await _notifications_enabled("notify_status_update", order["client_email"]):
         background_tasks.add_task(
             email_order_status_update,
             to=order["client_email"],
             name=order["client_name"],
             order_id=order_id,
             status=payload.status,
+        )
+        background_tasks.add_task(
+            _log_email, to=order["client_email"], subject="Order Status Update", order_id=order_id
         )
     return {"ok": True, "status": payload.status}
 
@@ -670,6 +787,57 @@ async def admin_update_order_pricing(
     await db.orders.update_one(
         {"id": order_id}, {"$set": {"quoted_price": payload.quoted_price, "updated_at": now_iso()}}
     )
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return doc
+
+
+class OrderAccentColorsIn(BaseModel):
+    accent_color_dark: Optional[str] = None
+    accent_color_light: Optional[str] = None
+
+
+def _validate_hex(value: Optional[str], field: str) -> Optional[str]:
+    if value is None or value == "":
+        return None
+    value = value.strip()
+    if not re.fullmatch(r"#[0-9A-Fa-f]{6}", value):
+        raise HTTPException(400, f"{field} must be a hex color like #1A1A1A")
+    return value.upper()
+
+
+@api.patch("/admin/orders/{order_id}/accent-colors")
+async def admin_update_accent_colors(
+    order_id: str, payload: OrderAccentColorsIn, admin=Depends(require_admin)
+) -> dict:
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    dark = _validate_hex(payload.accent_color_dark, "accent_color_dark")
+    light = _validate_hex(payload.accent_color_light, "accent_color_light")
+    await db.orders.update_one(
+        {"id": order_id},
+        {"$set": {"accent_color_dark": dark, "accent_color_light": light, "updated_at": now_iso()}},
+    )
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return doc
+
+
+class OrderDeadlineIn(BaseModel):
+    deadline: Optional[str] = None  # ISO date string, e.g. "2026-08-01"
+
+
+@api.patch("/admin/orders/{order_id}/deadline")
+async def admin_update_deadline(order_id: str, payload: OrderDeadlineIn, admin=Depends(require_admin)) -> dict:
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    deadline = payload.deadline.strip() if payload.deadline else None
+    if deadline:
+        try:
+            datetime.fromisoformat(deadline)
+        except ValueError:
+            raise HTTPException(400, "deadline must be an ISO date, e.g. 2026-08-01")
+    await db.orders.update_one({"id": order_id}, {"$set": {"deadline": deadline, "updated_at": now_iso()}})
     doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return doc
 
@@ -729,7 +897,14 @@ class SettingsUpdateIn(BaseModel):
     open_slots: Optional[int] = None
     total_slots: Optional[int] = None
     portfolio_tags: Optional[List[str]] = None
-    robux_game_link: Optional[str] = None
+    interac_email: Optional[str] = None
+    business_open: Optional[bool] = None
+    away_message: Optional[str] = None
+    default_revision_count: Optional[int] = None
+    timezone: Optional[str] = None
+    notify_new_message: Optional[bool] = None
+    notify_status_update: Optional[bool] = None
+    notify_payment_request: Optional[bool] = None
 
 
 @api.get("/admin/settings")
@@ -756,8 +931,24 @@ async def admin_update_settings(
         updates["total_slots"] = int(payload.total_slots)
     if payload.portfolio_tags is not None:
         updates["portfolio_tags"] = [t.strip() for t in payload.portfolio_tags if t.strip()]
-    if payload.robux_game_link is not None:
-        updates["robux_game_link"] = payload.robux_game_link.strip()
+    if payload.interac_email is not None:
+        updates["interac_email"] = payload.interac_email.strip()
+    if payload.business_open is not None:
+        updates["business_open"] = payload.business_open
+    if payload.away_message is not None:
+        updates["away_message"] = payload.away_message.strip() or None
+    if payload.default_revision_count is not None:
+        if payload.default_revision_count < 0:
+            raise HTTPException(400, "default_revision_count must be ≥ 0")
+        updates["default_revision_count"] = int(payload.default_revision_count)
+    if payload.timezone is not None:
+        updates["timezone"] = payload.timezone.strip()
+    if payload.notify_new_message is not None:
+        updates["notify_new_message"] = payload.notify_new_message
+    if payload.notify_status_update is not None:
+        updates["notify_status_update"] = payload.notify_status_update
+    if payload.notify_payment_request is not None:
+        updates["notify_payment_request"] = payload.notify_payment_request
     if not updates:
         raise HTTPException(400, "No changes provided")
     updates["last_content_updated"] = now_iso()
@@ -904,7 +1095,8 @@ def _payment_amount_cents(order: dict, stage: str) -> int:
     price = order.get("quoted_price")
     if not price:
         raise HTTPException(400, "This order hasn't been quoted a price yet")
-    return round(float(price) * 0.5 * 100)
+    full_payment = stage == "deposit" and order.get("full_payment_requested")
+    return round(float(price) * (1.0 if full_payment else 0.5) * 100)
 
 
 async def _confirm_payment(order_id: str, stage: str, *, method: str, background_tasks: BackgroundTasks) -> None:
@@ -912,27 +1104,35 @@ async def _confirm_payment(order_id: str, stage: str, *, method: str, background
     if not order:
         return
     now = now_iso()
+    full_payment = stage == "deposit" and order.get("full_payment_requested")
     field = "deposit_paid" if stage == "deposit" else "final_paid"
     next_status = "In Queue" if stage == "deposit" else "Delivered – Awaiting Review"
-    payment_status = "Deposit Paid" if stage == "deposit" else "Paid in Full"
+    payment_status = "Paid in Full" if full_payment else ("Deposit Paid" if stage == "deposit" else "Paid in Full")
+    note = "Full payment" if full_payment else f"{stage.title()} payment"
+
+    updates = {
+        field: True,
+        "status": next_status,
+        "payment_status": payment_status,
+        "payment_confirmation_requested": None,
+        "full_payment_requested": False,
+        "updated_at": now,
+    }
+    if full_payment:
+        updates["final_paid"] = True
 
     await db.orders.update_one(
         {"id": order_id},
         {
-            "$set": {
-                field: True,
-                "status": next_status,
-                "payment_status": payment_status,
-                "payment_confirmation_requested": None,
-                "updated_at": now,
-            },
-            "$push": {"activity": {"at": now, "note": f"{stage.title()} payment confirmed via {method}", "actor": "system"}},
+            "$set": updates,
+            "$push": {"activity": {"at": now, "note": f"{note} confirmed via {method}", "actor": "system"}},
         },
     )
     if stage == "deposit":
         background_tasks.add_task(
             email_deposit_confirmed, to=order["client_email"], name=order["client_name"], order_id=order_id
         )
+        background_tasks.add_task(_log_email, to=order["client_email"], subject="Deposit Received", order_id=order_id)
     else:
         background_tasks.add_task(
             email_order_delivered, to=order["client_email"], name=order["client_name"], order_id=order_id
@@ -940,6 +1140,8 @@ async def _confirm_payment(order_id: str, stage: str, *, method: str, background
         background_tasks.add_task(
             email_review_request, to=order["client_email"], name=order["client_name"], order_id=order_id
         )
+        background_tasks.add_task(_log_email, to=order["client_email"], subject="Design Delivered", order_id=order_id)
+        background_tasks.add_task(_log_email, to=order["client_email"], subject="Leave a Review", order_id=order_id)
 
 
 class CreatePaymentIntentIn(BaseModel):
@@ -1038,14 +1240,15 @@ async def portal_mark_payment_requested(
         kind="payment_confirmation",
         payload={"stage": payload.stage, "method": payload.method},
     )
-    background_tasks.add_task(
-        email_new_message,
-        to=ADMIN_EMAIL,
-        name="Vance",
-        order_id=order_id,
-        preview=f"Payment confirmation requested — {payload.method} {payload.stage}",
-        from_side="client",
-    )
+    if await _notifications_enabled("notify_new_message"):
+        background_tasks.add_task(
+            email_new_message,
+            to=ADMIN_EMAIL,
+            name="Vance",
+            order_id=order_id,
+            preview=f"Payment confirmation requested — {payload.method} {payload.stage}",
+            from_side="client",
+        )
     return msg
 
 
@@ -1114,7 +1317,7 @@ async def _persist_message(
 # Slash-command registry for the admin message composer — general pattern so
 # new payment-request types (or other embed-card commands) are one line to
 # add, not a one-off hardcoded to "-deposit".
-PAYMENT_COMMAND_STAGES = {"deposit": "deposit", "final": "final", "invoice": "final"}
+PAYMENT_COMMAND_STAGES = {"deposit": "deposit", "final": "final", "invoice": "final", "payment": "payment"}
 _COMMAND_RE = re.compile(r"^-(\w+)$")
 
 
@@ -1142,59 +1345,72 @@ async def admin_send_message(
     if stage:
         if not order.get("quoted_price"):
             raise HTTPException(400, "Set a quoted price for this order before requesting payment")
-        amount = round(order["quoted_price"] * 0.5, 2)
 
-        # Re-running -deposit/-final while a payment is still just "awaiting
-        # confirmation" (not yet actually confirmed) reopens the checkout —
-        # bring the order back to the pre-payment status automatically. Once
-        # the payment is genuinely confirmed (deposit_paid/final_paid),
-        # there's nothing to reopen, so this never fires past that point.
+        # "-payment" auto-resolves to whichever payment is actually
+        # outstanding: the full amount in one shot if nothing's been paid
+        # yet (rides the existing "deposit" checkout stage, just charging
+        # 100% instead of 50% via the full_payment_requested flag), or the
+        # normal remaining balance if the deposit's already in.
+        full_payment = False
+        if stage == "payment":
+            if order.get("deposit_paid"):
+                stage = "final"
+            else:
+                stage = "deposit"
+                full_payment = True
+
+        amount = round(order["quoted_price"] * (1.0 if full_payment else 0.5), 2)
+
+        # Re-running -deposit/-final/-payment while a payment is still just
+        # "awaiting confirmation" (not yet actually confirmed) reopens the
+        # checkout — bring the order back to the pre-payment status
+        # automatically. Once the payment is genuinely confirmed
+        # (deposit_paid/final_paid), there's nothing to reopen, so this
+        # never fires past that point.
         already_paid = order.get("deposit_paid") if stage == "deposit" else order.get("final_paid")
+        now = now_iso()
+        order_set = {"full_payment_requested": full_payment, "updated_at": now}
+        activity = order.get("activity", [])
         if order.get("status") == "Awaiting Manual Payment Confirmation" and not already_paid:
-            reset_status = (
-                "Accepted – Awaiting Deposit" if stage == "deposit" else "Delivered – Awaiting Final Payment"
-            )
-            now = now_iso()
-            activity = order.get("activity", [])
+            order_set["status"] = "Accepted – Awaiting Deposit" if stage == "deposit" else "Delivered – Awaiting Final Payment"
+            order_set["payment_confirmation_requested"] = None
             activity.append(
                 {"at": now, "note": f"Payment confirmation reset — {stage} checkout reopened", "actor": "admin"}
             )
-            await db.orders.update_one(
-                {"id": order_id},
-                {
-                    "$set": {
-                        "status": reset_status,
-                        "payment_confirmation_requested": None,
-                        "updated_at": now,
-                        "activity": activity,
-                    }
-                },
-            )
+            order_set["activity"] = activity
+        await db.orders.update_one({"id": order_id}, {"$set": order_set})
 
+        display_stage = "full" if full_payment else stage
         msg = await _persist_message(
-            order_id, "admin", "", [], kind="payment_request", payload={"stage": stage, "amount": amount}
+            order_id, "admin", "", [], kind="payment_request", payload={"stage": display_stage, "amount": amount}
         )
-        background_tasks.add_task(
-            email_payment_request,
-            to=order["client_email"],
-            name=order["client_name"],
-            order_id=order_id,
-            stage=stage,
-            amount=amount,
-        )
+        if await _notifications_enabled("notify_payment_request", order["client_email"]):
+            background_tasks.add_task(
+                email_payment_request,
+                to=order["client_email"],
+                name=order["client_name"],
+                order_id=order_id,
+                stage=display_stage,
+                amount=amount,
+            )
+            background_tasks.add_task(
+                _log_email, to=order["client_email"], subject="Payment Requested", order_id=order_id
+            )
         return msg
 
     msg = await _persist_message(order_id, "admin", payload.body, payload.attachment_file_ids)
     # Genuinely fire-and-forget: email fires after the response is sent, so a
     # slow/blocking SMTP round-trip never delays message delivery.
-    background_tasks.add_task(
-        email_new_message,
-        to=order["client_email"],
-        name=order["client_name"],
-        order_id=order_id,
-        preview=payload.body,
-        from_side="admin",
-    )
+    if await _notifications_enabled("notify_new_message", order["client_email"]):
+        background_tasks.add_task(
+            email_new_message,
+            to=order["client_email"],
+            name=order["client_name"],
+            order_id=order_id,
+            preview=payload.body,
+            from_side="admin",
+        )
+        background_tasks.add_task(_log_email, to=order["client_email"], subject="New Message", order_id=order_id)
     return msg
 
 
@@ -1219,14 +1435,15 @@ async def portal_send_message(
     if not order:
         raise HTTPException(404, "Order not found")
     msg = await _persist_message(order_id, "client", payload.body, payload.attachment_file_ids)
-    background_tasks.add_task(
-        email_new_message,
-        to=ADMIN_EMAIL,
-        name="Vance",
-        order_id=order_id,
-        preview=payload.body,
-        from_side="client",
-    )
+    if await _notifications_enabled("notify_new_message"):
+        background_tasks.add_task(
+            email_new_message,
+            to=ADMIN_EMAIL,
+            name="Vance",
+            order_id=order_id,
+            preview=payload.body,
+            from_side="client",
+        )
     return msg
 
 
@@ -1273,8 +1490,9 @@ async def _build_brand_kit_zip(order: dict) -> bytes:
         raise HTTPException(400, "No delivered logo attached to this order yet")
 
     logo_pil = await _download_image(logo_url)
-    accent_hex = order.get("accent_color") or dominant_color_hex(logo_pil)
-    variants = generate_logo_kit(logo_pil, accent_hex=accent_hex)
+    dark_hex = order.get("accent_color_dark") or dominant_color_hex(logo_pil)
+    light_hex = order.get("accent_color_light") or "#FFFFFF"
+    variants = generate_logo_kit(logo_pil, dark_accent_hex=dark_hex, light_accent_hex=light_hex)
 
     buf = _io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -1332,6 +1550,7 @@ async def admin_send_kit(
         preview=payload.message,
         from_side="admin",
     )
+    background_tasks.add_task(_log_email, to=order["client_email"], subject="New Message (Brand Kit)", order_id=order_id)
     return msg
 
 
@@ -1497,16 +1716,15 @@ DEFAULT_WATERMARK_INSTANCE = {"x_pct": 0.325, "y_pct": 0.325, "w_pct": 0.35, "h_
 
 
 @api.get("/admin/automation")
-async def admin_get_automation(admin=Depends(require_admin)) -> dict:
+async def admin_get_automation(request: Request, admin=Depends(require_admin)) -> dict:
     doc = await db.settings.find_one({"_id": "singleton"}) or {}
     return {
         "watermark_opacity": doc.get("watermark_opacity", 0.35),
         "watermark_instances": doc.get("watermark_instances") or [DEFAULT_WATERMARK_INSTANCE],
-        "watermark_url": (
-            "https://customer-assets-lxgj4vgw.emergentagent.net/"
-            "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/"
-            "pzblpyw9_Logo%20%2825%29.png"
-        ),
+        # Resolved from the incoming request rather than hardcoded, so this
+        # points at whichever backend is actually serving the admin UI
+        # (local in dev, live in prod) instead of always the live one.
+        "watermark_url": f"{str(request.base_url).rstrip('/')}/api/files/{BRAND_LOGO_WHITE_ID}",
         "mockup_count": await db.mockups.count_documents({}),
     }
 
@@ -1541,13 +1759,9 @@ async def admin_watermark_preview(payload: WatermarkPreviewIn, admin=Depends(req
         if payload.instances is not None
         else (settings.get("watermark_instances") or [DEFAULT_WATERMARK_INSTANCE])
     )
-    wm_url = (
-        "https://customer-assets-lxgj4vgw.emergentagent.net/"
-        "job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts/"
-        "pzblpyw9_Logo%20%2825%29.png"
-    )
+    wm_logo = load_local_asset("logo-white.png")
     try:
-        data = apply_watermark_layers(payload.logo_url, wm_url, opacity=opacity, instances=instances)
+        data = apply_watermark_layers(payload.logo_url, wm_logo, opacity=opacity, instances=instances)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(500, f"Watermark failed: {exc}") from exc
     return Response(content=data, media_type="image/png")
@@ -1600,6 +1814,411 @@ async def _save_generated(
 # ------------------------------------------------------------------ email trigger wiring on existing flows
 # Extend accept / decline / status endpoints to fire emails without duplicating
 # their logic — done by monkey-patching after-hook via wrappers below.
+
+
+# ------------------------------------------------------------------ templates (quick-reply CRUD)
+class TemplateIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=120)
+    body: str = Field(..., min_length=1, max_length=5000)
+
+
+class TemplateUpdateIn(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    body: Optional[str] = Field(default=None, min_length=1, max_length=5000)
+
+
+@api.get("/admin/templates")
+async def admin_list_templates(admin=Depends(require_admin)) -> List[dict]:
+    return await db.templates.find({}, {"_id": 0}).sort("created_at", 1).to_list(200)
+
+
+@api.post("/admin/templates")
+async def admin_create_template(payload: TemplateIn, admin=Depends(require_admin)) -> dict:
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": payload.title.strip(),
+        "body": payload.body.strip(),
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.templates.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.patch("/admin/templates/{template_id}")
+async def admin_update_template(template_id: str, payload: TemplateUpdateIn, admin=Depends(require_admin)) -> dict:
+    existing = await db.templates.find_one({"id": template_id})
+    if not existing:
+        raise HTTPException(404, "Template not found")
+    updates: dict = {"updated_at": now_iso()}
+    if payload.title is not None:
+        updates["title"] = payload.title.strip()
+    if payload.body is not None:
+        updates["body"] = payload.body.strip()
+    await db.templates.update_one({"id": template_id}, {"$set": updates})
+    doc = await db.templates.find_one({"id": template_id}, {"_id": 0})
+    return doc
+
+
+@api.delete("/admin/templates/{template_id}")
+async def admin_delete_template(template_id: str, admin=Depends(require_admin)) -> dict:
+    result = await db.templates.delete_one({"id": template_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Template not found")
+    return {"ok": True}
+
+
+# ------------------------------------------------------------------ calendar
+class CalendarEventIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    date: str  # ISO date, "2026-08-01"
+    time: Optional[str] = None  # "HH:MM"
+    color: str = Field(default="#6366F1")
+    description: Optional[str] = Field(default=None, max_length=2000)
+    link: Optional[str] = None
+    location: Optional[str] = Field(default=None, max_length=200)
+
+
+class CalendarEventUpdateIn(BaseModel):
+    title: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    date: Optional[str] = None
+    time: Optional[str] = None
+    color: Optional[str] = None
+    description: Optional[str] = Field(default=None, max_length=2000)
+    link: Optional[str] = None
+    location: Optional[str] = Field(default=None, max_length=200)
+
+
+@api.post("/admin/calendar-events")
+async def admin_create_calendar_event(payload: CalendarEventIn, admin=Depends(require_admin)) -> dict:
+    try:
+        datetime.fromisoformat(payload.date)
+    except ValueError:
+        raise HTTPException(400, "date must be an ISO date, e.g. 2026-08-01")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "title": payload.title.strip(),
+        "date": payload.date,
+        "time": payload.time,
+        "color": payload.color,
+        "description": payload.description,
+        "link": payload.link,
+        "location": payload.location,
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    await db.calendar_events.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+
+@api.patch("/admin/calendar-events/{event_id}")
+async def admin_update_calendar_event(
+    event_id: str, payload: CalendarEventUpdateIn, admin=Depends(require_admin)
+) -> dict:
+    existing = await db.calendar_events.find_one({"id": event_id})
+    if not existing:
+        raise HTTPException(404, "Event not found")
+    updates: dict = {"updated_at": now_iso()}
+    for field in ("title", "date", "time", "color", "description", "link", "location"):
+        value = getattr(payload, field)
+        if value is not None:
+            updates[field] = value.strip() if isinstance(value, str) and field != "description" else value
+    await db.calendar_events.update_one({"id": event_id}, {"$set": updates})
+    doc = await db.calendar_events.find_one({"id": event_id}, {"_id": 0})
+    return doc
+
+
+@api.delete("/admin/calendar-events/{event_id}")
+async def admin_delete_calendar_event(event_id: str, admin=Depends(require_admin)) -> dict:
+    result = await db.calendar_events.delete_one({"id": event_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Event not found")
+    return {"ok": True}
+
+
+@api.get("/admin/calendar")
+async def admin_get_calendar(admin=Depends(require_admin)) -> dict:
+    open_orders = await db.orders.find(
+        {"status": {"$nin": ["Closed", "Declined"]}, "deadline": {"$ne": None}},
+        {"_id": 0, "id": 1, "client_name": 1, "commission_type": 1, "deadline": 1, "status": 1},
+    ).to_list(500)
+
+    today = datetime.now(timezone.utc).date()
+    deadline_events = []
+    for o in open_orders:
+        try:
+            due = datetime.fromisoformat(o["deadline"]).date()
+        except (ValueError, TypeError):
+            continue
+        days_left = (due - today).days
+        color = "#EF4444" if days_left < 0 else "#F59E0B" if days_left <= 5 else "#22C55E"
+        deadline_events.append(
+            {
+                "id": f"deadline-{o['id']}",
+                "type": "deadline",
+                "order_id": o["id"],
+                "title": f"{o['client_name']} — {o.get('commission_type') or 'Project'}",
+                "date": o["deadline"],
+                "time": None,
+                "color": color,
+                "description": f"Status: {o['status']}",
+                "link": None,
+                "location": None,
+            }
+        )
+
+    custom_docs = await db.calendar_events.find({}, {"_id": 0}).to_list(1000)
+    custom_events = [{**doc, "type": "custom"} for doc in custom_docs]
+
+    return {"events": deadline_events + custom_events}
+
+
+# ------------------------------------------------------------------ analytics
+_PAYMENT_ACTIVITY_RE = re.compile(r"^(Deposit|Final|Full) payment confirmed via (\w+)$")
+
+
+def _order_revenue_events(order: dict) -> List[dict]:
+    """Derive real payment events from an order's activity log — the only
+    place payment confirmations are actually recorded with a timestamp."""
+    price = order.get("quoted_price")
+    if not price:
+        return []
+    events = []
+    for entry in order.get("activity", []):
+        m = _PAYMENT_ACTIVITY_RE.match(entry.get("note", ""))
+        if not m:
+            continue
+        kind, method = m.group(1), m.group(2)
+        amount = float(price) if kind == "Full" else float(price) * 0.5
+        events.append(
+            {
+                "at": entry["at"],
+                "amount": amount,
+                "method": method,
+                "client_email": order.get("client_email"),
+                "client_name": order.get("client_name"),
+                "commission_type": order.get("commission_type") or "Other",
+            }
+        )
+    return events
+
+
+@api.get("/admin/analytics")
+async def admin_get_analytics(admin=Depends(require_admin)) -> dict:
+    orders = await db.orders.find({}, {"_id": 0}).to_list(5000)
+    request_docs = await db.requests.find({}, {"_id": 0, "email": 1, "created_at": 1}).to_list(5000)
+
+    revenue_events: List[dict] = []
+    for o in orders:
+        revenue_events.extend(_order_revenue_events(o))
+
+    def month_key(iso_str: str) -> str:
+        return iso_str[:7]
+
+    revenue_by_month: dict = {}
+    method_totals: dict = {}
+    type_totals: dict = {}
+    client_totals: dict = {}
+    client_names: dict = {}
+    for ev in revenue_events:
+        k = month_key(ev["at"])
+        revenue_by_month[k] = revenue_by_month.get(k, 0) + ev["amount"]
+        method_totals[ev["method"]] = method_totals.get(ev["method"], 0) + ev["amount"]
+        type_totals[ev["commission_type"]] = type_totals.get(ev["commission_type"], 0) + ev["amount"]
+        client_totals[ev["client_email"]] = client_totals.get(ev["client_email"], 0) + ev["amount"]
+        client_names[ev["client_email"]] = ev["client_name"]
+
+    status_counts: dict = {}
+    for o in orders:
+        s = o.get("status", "Unknown")
+        status_counts[s] = status_counts.get(s, 0) + 1
+
+    turnaround_by_month: dict = {}
+    for o in orders:
+        created = o.get("created_at")
+        if not created:
+            continue
+        delivered_at = None
+        for entry in o.get("activity", []):
+            if entry.get("note", "").startswith("Status → Delivered"):
+                delivered_at = entry["at"]
+                break
+        if not delivered_at:
+            continue
+        try:
+            days = (datetime.fromisoformat(delivered_at) - datetime.fromisoformat(created)).days
+        except ValueError:
+            continue
+        turnaround_by_month.setdefault(month_key(delivered_at), []).append(days)
+
+    first_seen: dict = {}
+    for r in request_docs:
+        email, created = r.get("email"), r.get("created_at")
+        if not email or not created:
+            continue
+        if email not in first_seen or created < first_seen[email]:
+            first_seen[email] = created
+    new_clients_by_month: dict = {}
+    for created in first_seen.values():
+        k = month_key(created)
+        new_clients_by_month[k] = new_clients_by_month.get(k, 0) + 1
+
+    top_clients = sorted(
+        (
+            {"email": e, "name": client_names.get(e) or e, "revenue": round(v, 2)}
+            for e, v in client_totals.items()
+        ),
+        key=lambda x: x["revenue"],
+        reverse=True,
+    )[:10]
+
+    return {
+        "total_revenue": round(sum(ev["amount"] for ev in revenue_events), 2),
+        "revenue_by_month": [{"month": k, "revenue": round(v, 2)} for k, v in sorted(revenue_by_month.items())],
+        "orders_by_status": [{"status": s, "count": c} for s, c in status_counts.items()],
+        "payment_methods": [{"method": m, "amount": round(v, 2)} for m, v in method_totals.items()],
+        "revenue_by_type": [{"type": t, "revenue": round(v, 2)} for t, v in type_totals.items()],
+        "turnaround_trend": [
+            {"month": k, "avg_days": round(sum(v) / len(v), 1)} for k, v in sorted(turnaround_by_month.items())
+        ],
+        "new_clients_trend": [{"month": k, "count": c} for k, c in sorted(new_clients_by_month.items())],
+        "top_clients": top_clients,
+    }
+
+
+# ------------------------------------------------------------------ clients
+@api.get("/admin/clients")
+async def admin_list_clients(admin=Depends(require_admin)) -> List[dict]:
+    orders = await db.orders.find({}, {"_id": 0}).to_list(5000)
+    request_docs = await db.requests.find({}, {"_id": 0}).to_list(5000)
+    email_log_docs = await db.email_log.find({}, {"_id": 0, "to": 1}).to_list(20000)
+
+    emails_sent_count: dict = {}
+    for e in email_log_docs:
+        emails_sent_count[e["to"]] = emails_sent_count.get(e["to"], 0) + 1
+
+    clients: dict = {}
+    for r in request_docs:
+        email = r.get("email")
+        if not email:
+            continue
+        c = clients.setdefault(
+            email,
+            {"email": email, "name": r.get("name"), "first_seen": r["created_at"], "last_activity": r["created_at"], "order_count": 0, "lifetime_paid": 0.0},
+        )
+        if r["created_at"] < c["first_seen"]:
+            c["first_seen"] = r["created_at"]
+        if r["created_at"] > c["last_activity"]:
+            c["last_activity"] = r["created_at"]
+
+    for o in orders:
+        email = o.get("client_email")
+        if not email:
+            continue
+        c = clients.setdefault(
+            email,
+            {"email": email, "name": o.get("client_name"), "first_seen": o["created_at"], "last_activity": o["created_at"], "order_count": 0, "lifetime_paid": 0.0},
+        )
+        c["name"] = c["name"] or o.get("client_name")
+        c["order_count"] += 1
+        for ev in _order_revenue_events(o):
+            c["lifetime_paid"] += ev["amount"]
+        updated = o.get("updated_at") or o["created_at"]
+        if updated > c["last_activity"]:
+            c["last_activity"] = updated
+        if o["created_at"] < c["first_seen"]:
+            c["first_seen"] = o["created_at"]
+
+    result = []
+    for email, c in clients.items():
+        c["lifetime_paid"] = round(c["lifetime_paid"], 2)
+        c["emails_sent"] = emails_sent_count.get(email, 0)
+        result.append(c)
+    result.sort(key=lambda c: c["last_activity"], reverse=True)
+    return result
+
+
+@api.get("/admin/clients/{email}")
+async def admin_get_client(email: str, admin=Depends(require_admin)) -> dict:
+    email = email.lower()
+    orders = await db.orders.find({"client_email": email}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    if not orders:
+        req = await db.requests.find_one({"email": email}, {"_id": 0})
+        if not req:
+            raise HTTPException(404, "Client not found")
+
+    order_ids = [o["id"] for o in orders]
+    messages = await db.messages.find({"order_id": {"$in": order_ids}}, {"_id": 0}).sort("created_at", 1).to_list(2000) if order_ids else []
+    request_docs = await db.requests.find({"email": email}, {"_id": 0}).sort("created_at", 1).to_list(100)
+    email_log_docs = await db.email_log.find({"to": email}, {"_id": 0}).sort("sent_at", -1).to_list(500)
+    note_doc = await db.client_notes.find_one({"email": email}, {"_id": 0})
+
+    lifetime_paid = 0.0
+    for o in orders:
+        for ev in _order_revenue_events(o):
+            lifetime_paid += ev["amount"]
+
+    name = orders[0]["client_name"] if orders else (request_docs[0]["name"] if request_docs else email)
+    first_seen = min([r["created_at"] for r in request_docs] + [o["created_at"] for o in orders], default=None)
+
+    return {
+        "email": email,
+        "name": name,
+        "first_seen": first_seen,
+        "orders": orders,
+        "requests": request_docs,
+        "messages": messages,
+        "email_log": email_log_docs,
+        "lifetime_paid": round(lifetime_paid, 2),
+        "notes": note_doc.get("notes") if note_doc else "",
+        # null/missing per key = follow the global Settings toggle; true/false
+        # explicitly overrides it for just this client.
+        "notification_overrides": (note_doc.get("notification_overrides") if note_doc else None) or {},
+    }
+
+
+class ClientNotesIn(BaseModel):
+    notes: str = Field(default="", max_length=5000)
+
+
+@api.patch("/admin/clients/{email}/notes")
+async def admin_update_client_notes(email: str, payload: ClientNotesIn, admin=Depends(require_admin)) -> dict:
+    email = email.lower()
+    await db.client_notes.update_one(
+        {"email": email},
+        {"$set": {"email": email, "notes": payload.notes.strip(), "updated_at": now_iso()}},
+        upsert=True,
+    )
+    return {"ok": True, "notes": payload.notes.strip()}
+
+
+class ClientNotificationOverridesIn(BaseModel):
+    notify_new_message: Optional[bool] = None
+    notify_status_update: Optional[bool] = None
+    notify_payment_request: Optional[bool] = None
+
+
+@api.patch("/admin/clients/{email}/notification-overrides")
+async def admin_update_client_notification_overrides(
+    email: str, payload: ClientNotificationOverridesIn, admin=Depends(require_admin)
+) -> dict:
+    email = email.lower()
+    # Sent as a full replacement of the three keys — a key set to null here
+    # clears that override back to "follow the global setting" rather than
+    # leaving a stale true/false behind.
+    overrides = {
+        "notify_new_message": payload.notify_new_message,
+        "notify_status_update": payload.notify_status_update,
+        "notify_payment_request": payload.notify_payment_request,
+    }
+    await db.client_notes.update_one(
+        {"email": email},
+        {"$set": {"email": email, "notification_overrides": overrides, "updated_at": now_iso()}},
+        upsert=True,
+    )
+    return {"ok": True, "notification_overrides": overrides}
 
 
 # ------------------------------------------------------------------ mount

@@ -3,10 +3,15 @@
 const CDN = "https://customer-assets-lxgj4vgw.emergentagent.net/job_d9840bbe-488c-43b2-bb60-1116d64e8503/artifacts";
 const CDN2 = "https://customer-assets-lqy194kg.emergentagent.net/job_vance-wip/artifacts";
 
+// Same env var every other API call in this app uses — resolves to the
+// local backend in dev, the live one in production, instead of hardcoding
+// one or the other.
+const BACKEND_BASE = process.env.REACT_APP_BACKEND_URL;
+
 export const ASSETS = {
-  logoBlack: `${CDN}/2nhu3pin_Untitled%20design%20%284%29.png`,
-  logoWhite: `${CDN}/jlsm9cq4_Untitled%20design%20%285%29.png`,
-  watermark: `${CDN}/pzblpyw9_Logo%20%2825%29.png`,
+  logoBlack: `${BACKEND_BASE}/api/files/brand-logo-black`,
+  logoWhite: `${BACKEND_BASE}/api/files/brand-logo-white`,
+  watermark: `${BACKEND_BASE}/api/files/brand-logo-white`,
   mascot: `${CDN}/sipq6lrr_Showcase%20%283%29.png`,
   iconLock: `${CDN}/f826bkib_1.png`,
   iconLightning: `${CDN2}/egvuba66_2.png`,
