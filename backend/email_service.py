@@ -1,27 +1,70 @@
 """Branded email service for VANCE.
 
 Uses one shared HTML template (`render_email`) for all automated
-transactional emails. If SMTP fails or credentials are missing, emails are
-logged to stdout instead of raising — so the app stays functional during
-local dev / phased credential rollout.
+transactional emails. Sends via the Gmail API (OAuth2) over HTTPS rather
+than raw SMTP, since Render's free tier blocks outbound SMTP ports. If
+Gmail API credentials are missing or a send fails, emails are logged to
+stdout instead of raising — so the app stays functional during local dev /
+phased credential rollout.
 """
 
 from __future__ import annotations
 
+import base64
 import logging
 import os
-import smtplib
+import socket
+import time
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
 
+import requests
+import urllib3.util.connection as _urllib3_conn
+
+# Google's API hosts resolve to both IPv4 and IPv6. Render's containers have
+# no outbound IPv6 route, so an IPv6 attempt fails immediately with
+# "Network is unreachable" instead of falling back to IPv4. Force IPv4-only
+# resolution so requests never tries the unreachable AAAA record.
+_urllib3_conn.allowed_gai_family = lambda: socket.AF_INET
+
 logger = logging.getLogger("vance.email")
 
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ.get("SMTP_USER", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
+GMAIL_CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID", "")
+GMAIL_CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET", "")
+GMAIL_REFRESH_TOKEN = os.environ.get("GMAIL_REFRESH_TOKEN", "")
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "hello@vance.design")
+
+_access_token: Optional[str] = None
+_access_token_expiry: float = 0.0
+
+
+def _get_access_token() -> Optional[str]:
+    """Exchange the long-lived refresh token for a short-lived access token, cached until near-expiry."""
+    global _access_token, _access_token_expiry
+    if _access_token and time.time() < _access_token_expiry - 60:
+        return _access_token
+    if not (GMAIL_CLIENT_ID and GMAIL_CLIENT_SECRET and GMAIL_REFRESH_TOKEN):
+        return None
+    try:
+        resp = requests.post(
+            "https://oauth2.googleapis.com/token",
+            data={
+                "client_id": GMAIL_CLIENT_ID,
+                "client_secret": GMAIL_CLIENT_SECRET,
+                "refresh_token": GMAIL_REFRESH_TOKEN,
+                "grant_type": "refresh_token",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        _access_token = data["access_token"]
+        _access_token_expiry = time.time() + data.get("expires_in", 3600)
+        return _access_token
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Gmail token refresh failed: %s", exc)
+        return None
 
 VANCE_LOGO_WHITE = (
     "https://customer-assets-lxgj4vgw.emergentagent.net/"
@@ -128,10 +171,11 @@ def _log_only(to: str, subject: str, html: str) -> None:
 
 
 def send_email(*, to: str, subject: str, html: str) -> bool:
-    """Send an email. Returns True on success. Falls back to console-log on failure."""
+    """Send an email via the Gmail API. Returns True on success. Falls back to console-log on failure."""
     subject_full = f"{subject} | Do Not Reply"
-    if not SMTP_USER or not SMTP_PASSWORD:
-        logger.warning("SMTP creds missing — logging email instead of sending")
+    token = _get_access_token()
+    if not token:
+        logger.warning("Gmail API not configured — logging email instead of sending")
         _log_only(to, subject_full, html)
         return False
 
@@ -141,14 +185,15 @@ def send_email(*, to: str, subject: str, html: str) -> bool:
     msg["To"] = to
     msg.attach(MIMEText(html, "html", "utf-8"))
 
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
     try:
-        # App-password strings may contain spaces (Google displays them that way).
-        password = SMTP_PASSWORD.replace(" ", "")
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(SMTP_USER, password)
-            server.sendmail(FROM_EMAIL, [to], msg.as_string())
+        resp = requests.post(
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"raw": raw},
+            timeout=20,
+        )
+        resp.raise_for_status()
         logger.info("Email sent → %s (%s)", to, subject_full)
         return True
     except Exception as exc:  # noqa: BLE001
