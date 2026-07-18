@@ -90,9 +90,9 @@ clientClient.interceptors.request.use((cfg) => {
 });
 
 export const portalApi = {
-  login: (email, password) =>
-    client.post("/portal/login", { email, password: password || null }).then((r) => r.data),
-  verify: (token) => client.post("/portal/verify", { token }).then((r) => r.data),
+  requestCode: (email) => client.post("/portal/login", { email }).then((r) => r.data),
+  verifyCode: (email, code) =>
+    client.post("/portal/verify-otp", { email, code }).then((r) => r.data),
   me: () => clientClient.get("/portal/me").then((r) => r.data),
   listOrders: () => clientClient.get("/portal/orders").then((r) => r.data),
   getOrder: (id) => clientClient.get(`/portal/orders/${id}`).then((r) => r.data),

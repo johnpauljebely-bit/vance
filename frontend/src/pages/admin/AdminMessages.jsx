@@ -4,8 +4,9 @@ import { adminApi, adminMsgApi, publicApi } from "@/lib/api";
 import StatusPill from "@/pages/admin/_StatusPill";
 import { MessageBubble } from "@/pages/portal/ClientPortalOrder";
 import { toast } from "sonner";
-import { Send, Loader2, Search, Package, Upload, X } from "lucide-react";
+import { Loader2, Search, Package, Upload, X } from "lucide-react";
 import FileDropzone from "@/components/site/FileDropzone";
+import MessageComposer from "@/components/site/MessageComposer";
 
 export default function AdminMessages() {
   const [selectedId, setSelectedId] = useState(null);
@@ -13,7 +14,7 @@ export default function AdminMessages() {
   const { data: orders = [] } = useQuery({
     queryKey: ["admin-orders", "messages"],
     queryFn: () => adminApi.listOrders(),
-    refetchInterval: 15000,
+    refetchInterval: 6000,
   });
 
   const filtered = useMemo(() => {
@@ -182,7 +183,6 @@ function SendKitPanel({ order, onClose, onSent }) {
 
 function MessageThread({ order }) {
   const orderId = order.id;
-  const [body, setBody] = useState("");
   const [sendKitOpen, setSendKitOpen] = useState(false);
   const qc = useQueryClient();
   const listRef = useRef(null);
@@ -190,14 +190,16 @@ function MessageThread({ order }) {
   const { data: messages = [] } = useQuery({
     queryKey: ["admin-messages", orderId],
     queryFn: () => adminMsgApi.list(orderId),
-    refetchInterval: 10000,
+    refetchInterval: 4000,
   });
 
   const send = useMutation({
-    mutationFn: (b) => adminMsgApi.send(orderId, b),
-    onSuccess: () => {
-      setBody("");
-      qc.invalidateQueries({ queryKey: ["admin-messages", orderId] });
+    mutationFn: ({ body, attachments }) => adminMsgApi.send(orderId, body, attachments),
+    onSuccess: (newMsg) => {
+      // Patch the cache directly with the response we already have instead
+      // of refetching the whole list — the POST already returns the created
+      // message, so a GET round-trip here only adds latency for nothing.
+      qc.setQueryData(["admin-messages", orderId], (prev) => [...(prev || []), newMsg]);
     },
     onError: (e) => toast.error(e?.response?.data?.detail || "Failed to send"),
   });
@@ -245,30 +247,12 @@ function MessageThread({ order }) {
           messages.map((m) => <MessageBubble key={m.id} msg={m} me="admin" />)
         )}
       </div>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (body.trim()) send.mutate(body.trim());
-        }}
-        className="p-3 border-t border-[rgba(26,26,26,0.08)] flex gap-2"
-      >
-        <input
-          type="text"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="Reply to client…"
-          data-testid="admin-message-input"
-          className="input-base flex-1"
-        />
-        <button
-          type="submit"
-          disabled={!body.trim() || send.isPending}
-          data-testid="admin-message-send"
-          className="btn-primary"
-        >
-          {send.isPending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-        </button>
-      </form>
+      <MessageComposer
+        onSend={(body, attachments) => send.mutate({ body, attachments })}
+        sending={send.isPending}
+        placeholder="Reply to client…"
+        testIdPrefix="admin-message"
+      />
     </>
   );
 }

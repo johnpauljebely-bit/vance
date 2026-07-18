@@ -4,8 +4,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { portalApi, ORDER_STATUSES } from "@/lib/api";
 import StatusPill from "@/pages/admin/_StatusPill";
 import { toast } from "sonner";
-import { ArrowLeft, Send, Star, Loader2, MessageSquare, Download, Paperclip } from "lucide-react";
+import { ArrowLeft, Star, Loader2, MessageSquare, Download, FileText } from "lucide-react";
 import PaymentDueCard from "./PaymentDueCard";
+import MessageComposer from "@/components/site/MessageComposer";
 
 const STATUS_SEQUENCE = [
   "New",
@@ -27,13 +28,15 @@ export default function ClientPortalOrder() {
   const { data: order } = useQuery({
     queryKey: ["portal-order", id],
     queryFn: () => portalApi.getOrder(id),
-    refetchInterval: 20000,
+    // Fast enough to feel "live" (status bar, payment confirmation) without
+    // a real push channel — no WebSocket/SSE infra exists in this app yet.
+    refetchInterval: 4000,
   });
 
   const { data: messages = [] } = useQuery({
     queryKey: ["portal-messages", id],
     queryFn: () => portalApi.listMessages(id),
-    refetchInterval: 12000,
+    refetchInterval: 4000,
     enabled: !!order,
   });
 
@@ -43,6 +46,15 @@ export default function ClientPortalOrder() {
   const canReview =
     order.status === "Delivered – Awaiting Review" ||
     order.status === "Delivered – Awaiting Final Payment";
+
+  // The payment-request embed card's "Pay" button can be clicked from the
+  // Messages tab, where the Payment Due section isn't even in the DOM (it
+  // only renders on Overview) — switch tabs first, then scroll once it's
+  // mounted, instead of a plain #anchor link that silently does nothing.
+  const goToPayment = () => {
+    setTab("overview");
+    setTimeout(() => document.getElementById("payment-due")?.scrollIntoView({ behavior: "smooth" }), 50);
+  };
 
   return (
     <div data-testid="portal-order-page" className="space-y-8">
@@ -114,7 +126,7 @@ export default function ClientPortalOrder() {
       </div>
 
       {tab === "overview" && <OverviewTab order={order} />}
-      {tab === "messages" && <MessagesTab orderId={id} messages={messages} />}
+      {tab === "messages" && <MessagesTab orderId={id} messages={messages} onGoToPayment={goToPayment} />}
       {tab === "review" && canReview && <ReviewTab orderId={id} onDone={() => qc.invalidateQueries()} />}
     </div>
   );
@@ -216,16 +228,14 @@ function MetaRow({ label, value }) {
   );
 }
 
-function MessagesTab({ orderId, messages }) {
-  const [body, setBody] = useState("");
+function MessagesTab({ orderId, messages, onGoToPayment }) {
   const qc = useQueryClient();
   const listRef = useRef(null);
 
   const send = useMutation({
-    mutationFn: (b) => portalApi.sendMessage(orderId, b),
-    onSuccess: () => {
-      setBody("");
-      qc.invalidateQueries({ queryKey: ["portal-messages", orderId] });
+    mutationFn: ({ body, attachments }) => portalApi.sendMessage(orderId, body, attachments),
+    onSuccess: (newMsg) => {
+      qc.setQueryData(["portal-messages", orderId], (prev) => [...(prev || []), newMsg]);
     },
     onError: (e) => toast.error(e?.response?.data?.detail || "Failed to send"),
   });
@@ -246,39 +256,56 @@ function MessagesTab({ orderId, messages }) {
             No messages yet — say hi.
           </p>
         ) : (
-          messages.map((m) => <MessageBubble key={m.id} msg={m} me="client" />)
+          messages.map((m) => <MessageBubble key={m.id} msg={m} me="client" onGoToPayment={onGoToPayment} />)
         )}
       </div>
-      <form
-        onSubmit={(e) => {
-          e.preventDefault();
-          if (body.trim()) send.mutate(body.trim());
-        }}
-        className="border-t border-[rgba(26,26,26,0.08)] p-3 flex gap-2"
-      >
-        <input
-          type="text"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="Type a message…"
-          data-testid="portal-message-input"
-          className="input-base flex-1"
-        />
-        <button
-          type="submit"
-          disabled={!body.trim() || send.isPending}
-          data-testid="portal-message-send"
-          className="btn-primary"
-        >
-          {send.isPending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-        </button>
-      </form>
+      <MessageComposer
+        onSend={(body, attachments) => send.mutate({ body, attachments })}
+        sending={send.isPending}
+        placeholder="Type a message…"
+        testIdPrefix="portal-message"
+      />
     </div>
   );
 }
 
-export function MessageBubble({ msg, me }) {
+export function MessageBubble({ msg, me, onGoToPayment }) {
   const mine = msg.from_side === me;
+
+  if (msg.kind === "payment_request") {
+    const { stage, amount } = msg.payload || {};
+    const label = stage === "final" ? "Pay Final Balance" : "Pay Deposit";
+    return (
+      <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
+        <div
+          data-testid={`msg-${msg.id}`}
+          className="max-w-[80%] rounded-[16px] border-2 border-[#FF6B35]/25 bg-white p-4 shadow-sm"
+        >
+          <p className="text-[10px] font-bold uppercase tracking-widest text-[#FF6B35]">
+            Payment Requested
+          </p>
+          <p className="mt-1 text-2xl font-bold tracking-[-0.02em] text-[#1A1A1A]">
+            ${(amount ?? 0).toFixed(2)} <span className="text-sm font-semibold text-[#8A8588]">USD</span>
+          </p>
+          <p className="mt-0.5 text-xs text-[#8A8588] capitalize">{stage} payment</p>
+          {me === "client" && (
+            <button
+              type="button"
+              onClick={onGoToPayment}
+              data-testid={`msg-pay-btn-${msg.id}`}
+              className="btn-primary mt-3 inline-flex !py-2 !px-4 text-xs"
+            >
+              {label}
+            </button>
+          )}
+          <p className="mt-2 text-[10px] text-[#8A8588]">
+            {new Date(msg.created_at).toLocaleString()}
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex ${mine ? "justify-end" : "justify-start"}`}>
       <div
@@ -287,21 +314,44 @@ export function MessageBubble({ msg, me }) {
           mine ? "bg-[#1A1A1A] text-white" : "bg-white text-[#1A1A1A] border border-[rgba(26,26,26,0.08)]"
         }`}
       >
-        <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>
-        {(msg.attachment_file_ids || []).map((fileId) => (
-          <a
-            key={fileId}
-            href={`${process.env.REACT_APP_BACKEND_URL}/api/files/${fileId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid={`msg-attachment-${fileId}`}
-            className={`mt-2 flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-xs font-semibold underline ${
-              mine ? "bg-white/10 text-white" : "bg-[#F7F5F2] text-[#1A1A1A]"
-            }`}
-          >
-            <Paperclip size={12} /> Download attachment
-          </a>
-        ))}
+        {msg.body && <p className="whitespace-pre-wrap leading-relaxed">{msg.body}</p>}
+        {(msg.attachments && msg.attachments.length > 0
+          ? msg.attachments
+          : (msg.attachment_file_ids || []).map((id) => ({ file_id: id, filename: "Attachment", content_type: "" }))
+        ).map((att) => {
+          const url = `${process.env.REACT_APP_BACKEND_URL}/api/files/${att.file_id}`;
+          const isImage = att.content_type?.startsWith("image/");
+          return isImage ? (
+            <a
+              key={att.file_id}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid={`msg-attachment-${att.file_id}`}
+              className="mt-2 block"
+            >
+              <img
+                src={url}
+                alt={att.filename}
+                className="max-h-48 max-w-full rounded-[10px] border border-[rgba(26,26,26,0.08)] object-cover"
+              />
+            </a>
+          ) : (
+            <a
+              key={att.file_id}
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid={`msg-attachment-${att.file_id}`}
+              className={`mt-2 flex items-center gap-1.5 rounded-[8px] px-2.5 py-1.5 text-xs font-semibold underline ${
+                mine ? "bg-white/10 text-white" : "bg-[#F7F5F2] text-[#1A1A1A]"
+              }`}
+            >
+              <FileText size={12} className="shrink-0" />
+              <span className="truncate">{att.filename}</span>
+            </a>
+          );
+        })}
         <p className={`mt-1 text-[10px] ${mine ? "text-white/50" : "text-[#8A8588]"}`}>
           {new Date(msg.created_at).toLocaleString()}
         </p>

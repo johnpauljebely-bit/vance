@@ -1,6 +1,6 @@
 """Branded email service for VANCE.
 
-Uses one shared HTML template (`render_email`) for all 7 automated
+Uses one shared HTML template (`render_email`) for all automated
 transactional emails. If SMTP fails or credentials are missing, emails are
 logged to stdout instead of raising — so the app stays functional during
 local dev / phased credential rollout.
@@ -157,7 +157,7 @@ def send_email(*, to: str, subject: str, html: str) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------- 7 triggers
+# ---------------------------------------------------------------------- triggers
 def portal_url(path: str = "") -> str:
     base = os.environ.get("PUBLIC_URL", "https://vance-wip.preview.emergentagent.com").rstrip("/")
     return f"{base}{path}"
@@ -168,7 +168,8 @@ def email_request_accepted(*, to: str, name: str, order_id: str) -> None:
       <p>Hey {name},</p>
       <p>Good news — I've accepted your commission request and I'm excited to get started.</p>
       <p>Next step: a <strong>50% deposit</strong> is required before work begins.</p>
-      <p>Once that's in, you'll get access to your Client Portal where you can track progress and message me directly.</p>
+      <p>Head to your Client Portal below to get started — enter your email and
+      we'll send a 6-digit code to log you in, no password needed.</p>
       <p>— Vance</p>
     """
     send_email(
@@ -177,7 +178,7 @@ def email_request_accepted(*, to: str, name: str, order_id: str) -> None:
         html=render_email(
             headline="Commission accepted",
             body_html=body,
-            button_label="Pay Deposit",
+            button_label="Go to Client Portal",
             button_link=portal_url(f"/portal/orders/{order_id}"),
         ),
     )
@@ -259,11 +260,12 @@ def email_review_request(*, to: str, name: str, order_id: str) -> None:
 
 def email_new_message(*, to: str, name: str, order_id: str, preview: str, from_side: str) -> None:
     who = "Vance" if from_side == "admin" else "your client"
+    preview_text = preview.strip()[:200] if preview.strip() else "📎 Sent an attachment"
     body = f"""
       <p>Hey {name},</p>
       <p>You've got a new message from {who} on your commission:</p>
       <blockquote style="margin:16px 0; padding:12px 16px; border-left:3px solid #FF6B35; background:#F7F5F2; font-style:italic; color:#1A1A1A;">
-        {preview[:200]}
+        {preview_text}
       </blockquote>
       <p>— Vance</p>
     """
@@ -280,20 +282,63 @@ def email_new_message(*, to: str, name: str, order_id: str, preview: str, from_s
     )
 
 
-def email_magic_link(*, to: str, name: str, link_token: str) -> None:
+def email_otp_code(*, to: str, name: str, code: str) -> None:
     body = f"""
       <p>Hey {name},</p>
-      <p>Here's your one-time login link to access your Client Portal.</p>
-      <p>This link expires in <strong>30 minutes</strong> for security. If you didn't request this, you can safely ignore this email.</p>
+      <p>Here's your one-time login code for the Client Portal:</p>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0;">
+        <tr>
+          <td style="background:#F7F5F2; border-radius:12px; padding:18px 28px; font-family:'Poppins',Arial,sans-serif; font-weight:700; font-size:32px; letter-spacing:0.3em; color:#1A1A1A;">
+            {code}
+          </td>
+        </tr>
+      </table>
+      <p>This code expires in <strong>10 minutes</strong> and can only be used once. If you didn't request this, you can safely ignore this email.</p>
       <p>— Vance</p>
     """
     send_email(
         to=to,
-        subject="Portal Login Link",
+        subject="Your Login Code",
+        html=render_email(headline="Your login code", body_html=body),
+    )
+
+
+def email_order_status_update(*, to: str, name: str, order_id: str, status: str) -> None:
+    body = f"""
+      <p>Hey {name},</p>
+      <p>Quick update — your commission status just changed to:</p>
+      <p style="font-size:18px; font-weight:700; margin:12px 0;">{status}</p>
+      <p>You can see the full timeline and message me anytime from your Client Portal.</p>
+      <p>— Vance</p>
+    """
+    send_email(
+        to=to,
+        subject="Order Status Update",
         html=render_email(
-            headline="Your login link",
+            headline="Your order status just updated.",
             body_html=body,
-            button_label="Log In",
-            button_link=portal_url(f"/portal/verify?token={link_token}"),
+            button_label="View Order",
+            button_link=portal_url(f"/portal/orders/{order_id}"),
+        ),
+    )
+
+
+def email_payment_request(*, to: str, name: str, order_id: str, stage: str, amount: float) -> None:
+    stage_label = "deposit" if stage == "deposit" else "final payment"
+    body = f"""
+      <p>Hey {name},</p>
+      <p>Just a friendly reminder — your <strong>{stage_label}</strong> of
+      <strong>${amount:.2f} USD</strong> is ready whenever you are.</p>
+      <p>Head to your Client Portal to pay by card, Robux, or check your available options.</p>
+      <p>— Vance</p>
+    """
+    send_email(
+        to=to,
+        subject="Payment Requested",
+        html=render_email(
+            headline=f"{stage_label.title()} requested — ${amount:.2f} USD",
+            body_html=body,
+            button_label="Pay Now",
+            button_link=portal_url(f"/portal/orders/{order_id}#payment-due"),
         ),
     )

@@ -1,54 +1,105 @@
-import { useEffect, useState } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { portalApi } from "@/lib/api";
 import { ASSETS } from "@/lib/brand";
 import { toast } from "sonner";
-import { Loader2, ArrowLeft, Mail, Send } from "lucide-react";
+import { Loader2, ArrowLeft, ShieldCheck, Send } from "lucide-react";
+
+const RESEND_COOLDOWN_SECONDS = 45;
+const CODE_LENGTH = 6;
 
 export default function ClientPortalLogin() {
+  const [step, setStep] = useState("email"); // "email" | "code"
   const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
+  const [digits, setDigits] = useState(Array(CODE_LENGTH).fill(""));
   const [sending, setSending] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [searchParams] = useSearchParams();
-  const magicToken = searchParams.get("token");
+  const [verifying, setVerifying] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [cooldown, setCooldown] = useState(0);
   const navigate = useNavigate();
+  const inputRefs = useRef([]);
 
   useEffect(() => {
-    if (!magicToken) return;
-    portalApi
-      .verify(magicToken)
-      .then((data) => {
-        localStorage.setItem("vance_client_token", data.access_token);
-        toast.success("Signed in via magic link.");
-        navigate("/portal");
-      })
-      .catch((err) => {
-        toast.error(err?.response?.data?.detail || "Link invalid or expired");
-      });
-  }, [magicToken, navigate]);
+    if (cooldown <= 0) return;
+    const t = setInterval(() => setCooldown((c) => Math.max(0, c - 1)), 1000);
+    return () => clearInterval(t);
+  }, [cooldown]);
 
-  const onSubmit = async (e) => {
-    e.preventDefault();
-    if (!email.includes("@")) return;
+  const requestCode = async (e) => {
+    e?.preventDefault();
+    if (!email.includes("@") || cooldown > 0) return;
     setSending(true);
+    setErrorMsg(null);
     try {
-      const res = await portalApi.login(email, password || null);
-      if (res.mode === "password" && res.access_token) {
-        localStorage.setItem("vance_client_token", res.access_token);
-        toast.success("Signed in.");
-        navigate("/portal");
-      } else {
-        setSent(true);
-        toast.success("Magic link sent — check your inbox.");
-      }
+      await portalApi.requestCode(email.trim().toLowerCase());
+      setStep("code");
+      setDigits(Array(CODE_LENGTH).fill(""));
+      setCooldown(RESEND_COOLDOWN_SECONDS);
+      toast.success("Code sent — check your inbox.");
+      setTimeout(() => inputRefs.current[0]?.focus(), 50);
     } catch (err) {
-      toast.error(err?.response?.data?.detail || "Login failed");
+      const detail = err?.response?.data?.detail;
+      if (err?.response?.status === 404) {
+        setErrorMsg(detail || "You need to create an order first.");
+      } else {
+        toast.error(detail || "Could not send code");
+      }
     } finally {
       setSending(false);
     }
   };
+
+  const setDigit = (i, value) => {
+    const v = value.replace(/\D/g, "").slice(-1);
+    setDigits((prev) => {
+      const next = [...prev];
+      next[i] = v;
+      return next;
+    });
+    if (v && i < CODE_LENGTH - 1) inputRefs.current[i + 1]?.focus();
+  };
+
+  const onKeyDown = (i, e) => {
+    if (e.key === "Backspace" && !digits[i] && i > 0) {
+      inputRefs.current[i - 1]?.focus();
+    }
+  };
+
+  const onPaste = (e) => {
+    const pasted = e.clipboardData.getData("text").replace(/\D/g, "").slice(0, CODE_LENGTH);
+    if (!pasted) return;
+    e.preventDefault();
+    setDigits(Array.from({ length: CODE_LENGTH }, (_, i) => pasted[i] || ""));
+    inputRefs.current[Math.min(pasted.length, CODE_LENGTH - 1)]?.focus();
+  };
+
+  const verify = async (e) => {
+    e?.preventDefault();
+    const code = digits.join("");
+    if (code.length !== CODE_LENGTH) return;
+    setVerifying(true);
+    setErrorMsg(null);
+    try {
+      const res = await portalApi.verifyCode(email.trim().toLowerCase(), code);
+      localStorage.setItem("vance_client_token", res.access_token);
+      toast.success("Signed in.");
+      navigate("/portal");
+    } catch (err) {
+      const detail = err?.response?.data?.detail || "Verification failed";
+      setErrorMsg(detail);
+      setDigits(Array(CODE_LENGTH).fill(""));
+      inputRefs.current[0]?.focus();
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  useEffect(() => {
+    if (step === "code" && digits.every((d) => d) && !verifying) {
+      verify();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [digits]);
 
   return (
     <div
@@ -70,41 +121,34 @@ export default function ClientPortalLogin() {
             Client Portal
           </p>
           <h1 className="mt-2 text-3xl font-bold tracking-[-0.03em] md:text-4xl">
-            Get your{" "}
-            <span className="accent-italic text-[#FF6B35]">login link.</span>
+            {step === "email" ? (
+              <>Get your <span className="accent-italic text-[#FF6B35]">login code.</span></>
+            ) : (
+              <>Enter your <span className="accent-italic text-[#FF6B35]">code.</span></>
+            )}
           </h1>
           <p className="mt-3 text-center text-sm text-[#1A1A1A]/70">
-            Enter the email you used for your commission and we'll send you a
-            one-time link. Or, during dev, use the password below.
+            {step === "email"
+              ? "Enter the email you used for your commission and we'll send you a 6-digit code."
+              : `We sent a 6-digit code to ${email}. It expires in 10 minutes.`}
           </p>
         </div>
 
-        <form
-          onSubmit={onSubmit}
+        <div
           data-testid="portal-login-form"
           className="rounded-[24px] border border-[rgba(26,26,26,0.08)] bg-white p-8 shadow-[0_20px_60px_-20px_rgba(26,26,26,0.15)]"
-          noValidate
         >
-          {sent ? (
-            <div className="text-center" data-testid="portal-login-sent">
-              <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-[#FF6B35]/15">
-                <Mail size={24} className="text-[#FF6B35]" />
-              </div>
-              <p className="mt-4 font-bold">Check your inbox.</p>
-              <p className="mt-1 text-sm text-[#8A8588]">
-                Your link expires in 30 minutes. If you don't see it, check spam.
-              </p>
-              <button
-                type="button"
-                onClick={() => setSent(false)}
-                data-testid="portal-login-retry"
-                className="btn-secondary mt-6"
-              >
-                Use a different email
-              </button>
-            </div>
-          ) : (
-            <>
+          {errorMsg && (
+            <p
+              data-testid="portal-login-error"
+              className="mb-4 rounded-[10px] bg-[#EF4444]/10 px-3 py-2 text-sm font-semibold text-[#EF4444]"
+            >
+              {errorMsg}
+            </p>
+          )}
+
+          {step === "email" ? (
+            <form onSubmit={requestCode} noValidate>
               <label className="block text-xs font-bold uppercase tracking-widest text-[#1A1A1A]/80">
                 Email address
               </label>
@@ -116,33 +160,8 @@ export default function ClientPortalLogin() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="you@example.com"
                 required
+                autoFocus
               />
-
-              {showPassword ? (
-                <>
-                  <label className="mt-4 block text-xs font-bold uppercase tracking-widest text-[#1A1A1A]/80">
-                    Dev password
-                  </label>
-                  <input
-                    type="password"
-                    data-testid="portal-password-input"
-                    className="input-base mt-1.5"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    placeholder="DEVTEST"
-                  />
-                </>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(true)}
-                  data-testid="portal-show-password-toggle"
-                  className="mt-3 text-xs text-[#8A8588] underline hover:text-[#1A1A1A]"
-                >
-                  Use dev password instead
-                </button>
-              )}
-
               <button
                 type="submit"
                 disabled={!email.includes("@") || sending}
@@ -152,15 +171,73 @@ export default function ClientPortalLogin() {
                 {sending ? (
                   <><Loader2 size={16} className="animate-spin" /> Sending…</>
                 ) : (
-                  <><Send size={16} /> {password ? "Sign in with password" : "Send login link"}</>
+                  <><Send size={16} /> Send login code</>
                 )}
               </button>
               <p className="mt-4 text-xs text-[#8A8588]">
-                Links expire 15–30 minutes after sending. Sessions last 30 days.
+                Codes expire after 10 minutes. Sessions last 30 days.
               </p>
-            </>
+            </form>
+          ) : (
+            <form onSubmit={verify} noValidate>
+              <label className="block text-xs font-bold uppercase tracking-widest text-[#1A1A1A]/80 text-center">
+                6-digit code
+              </label>
+              <div className="mt-3 flex justify-center gap-2" data-testid="portal-otp-inputs" onPaste={onPaste}>
+                {digits.map((d, i) => (
+                  <input
+                    key={i}
+                    ref={(el) => (inputRefs.current[i] = el)}
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={d}
+                    onChange={(e) => setDigit(i, e.target.value)}
+                    onKeyDown={(e) => onKeyDown(i, e)}
+                    data-testid={`portal-otp-digit-${i}`}
+                    className="h-14 w-11 rounded-[10px] border border-[rgba(26,26,26,0.15)] text-center text-xl font-bold outline-none focus:border-[#FF6B35] focus:ring-2 focus:ring-[#FF6B35]/20"
+                  />
+                ))}
+              </div>
+
+              <button
+                type="submit"
+                disabled={digits.some((d) => !d) || verifying}
+                data-testid="portal-verify-submit"
+                className="btn-primary mt-5 w-full"
+              >
+                {verifying ? (
+                  <><Loader2 size={16} className="animate-spin" /> Verifying…</>
+                ) : (
+                  <><ShieldCheck size={16} /> Verify &amp; sign in</>
+                )}
+              </button>
+
+              <div className="mt-4 flex items-center justify-between text-xs">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStep("email");
+                    setErrorMsg(null);
+                  }}
+                  data-testid="portal-login-retry"
+                  className="text-[#8A8588] underline hover:text-[#1A1A1A]"
+                >
+                  Use a different email
+                </button>
+                <button
+                  type="button"
+                  onClick={requestCode}
+                  disabled={cooldown > 0 || sending}
+                  data-testid="portal-resend-code"
+                  className="font-semibold text-[#8A8588] underline hover:text-[#1A1A1A] disabled:no-underline disabled:cursor-not-allowed"
+                >
+                  {cooldown > 0 ? `Resend code (${cooldown}s)` : "Resend code"}
+                </button>
+              </div>
+            </form>
           )}
-        </form>
+        </div>
       </div>
     </div>
   );

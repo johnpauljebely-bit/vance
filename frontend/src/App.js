@@ -33,9 +33,8 @@ function App() {
           <Route path="/privacy" element={<Privacy />} />
           <Route path="/staff/login" element={<StaffLogin />} />
           <Route path="/portal/login" element={<ClientPortalLogin />} />
-          <Route path="/portal/verify" element={<ClientPortalLogin />} />
 
-          {/* Client portal (magic-link + DEVTEST) */}
+          {/* Client portal (email + 6-digit OTP login) */}
           <Route path="/portal" element={<ClientPortalLayout />}>
             <Route index element={<ClientPortalHome />} />
             <Route path="orders/:id" element={<ClientPortalOrder />} />

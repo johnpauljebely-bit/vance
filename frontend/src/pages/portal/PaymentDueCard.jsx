@@ -25,7 +25,7 @@ export default function PaymentDueCard({ order }) {
 
   if (!order.quoted_price) {
     return (
-      <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6" data-testid="payment-due-card">
+      <div id="payment-due" className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6 scroll-mt-6" data-testid="payment-due-card">
         <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">Payment</p>
         <p className="mt-2 text-sm text-[#1A1A1A]/70">
           Your project hasn't been quoted a price yet — Vance will follow up before payment is needed.
@@ -39,7 +39,8 @@ export default function PaymentDueCard({ order }) {
   if (order.payment_confirmation_requested) {
     return (
       <div
-        className="rounded-[20px] border border-[#FF6B35]/30 bg-[#FF6B35]/5 p-6"
+        id="payment-due"
+        className="rounded-[20px] border border-[#FF6B35]/30 bg-[#FF6B35]/5 p-6 scroll-mt-6"
         data-testid="payment-due-card"
       >
         <p className="text-xs font-bold uppercase tracking-widest text-[#FF6B35]">
@@ -54,7 +55,7 @@ export default function PaymentDueCard({ order }) {
   }
 
   return (
-    <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6" data-testid="payment-due-card">
+    <div id="payment-due" className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6 scroll-mt-6" data-testid="payment-due-card">
       <p className="text-xs font-bold uppercase tracking-widest text-[#FF6B35]">
         Payment due — {stage === "deposit" ? "50% deposit" : "50% final payment"}
       </p>

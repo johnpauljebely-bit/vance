@@ -13,7 +13,7 @@ export default function AdminOrders() {
   const { data: orders = [], isLoading } = useQuery({
     queryKey: ["admin-orders", filter],
     queryFn: () => adminApi.listOrders(filter),
-    refetchInterval: 15000,
+    refetchInterval: 6000,
   });
 
   return (
@@ -107,6 +107,15 @@ function OrderDetailPanel({ order }) {
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["admin-orders"] });
 
+  const updateStatus = useMutation({
+    mutationFn: (status) => adminApi.updateOrderStatus(order.id, status),
+    onSuccess: () => {
+      toast.success("Status updated — client notified by email");
+      invalidate();
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to update status"),
+  });
+
   const savePrice = useMutation({
     mutationFn: () => adminApi.updateOrderPricing(order.id, parseFloat(price)),
     onSuccess: () => {
@@ -155,7 +164,33 @@ function OrderDetailPanel({ order }) {
   };
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-5" data-testid={`order-detail-${order.id}`}>
+    <div data-testid={`order-detail-${order.id}`}>
+      <div className="mb-5" onClick={(e) => e.stopPropagation()}>
+        <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+          Order status
+        </label>
+        <div className="mt-1.5 flex items-center gap-2">
+          <select
+            value={order.status}
+            onChange={(e) => updateStatus.mutate(e.target.value)}
+            disabled={updateStatus.isPending}
+            data-testid={`order-status-select-${order.id}`}
+            className="input-base max-w-xs"
+          >
+            {ORDER_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+          {updateStatus.isPending && <Loader2 size={14} className="animate-spin text-[#8A8588]" />}
+        </div>
+        <p className="mt-1 text-[10px] text-[#8A8588]">
+          Every change logs to the order activity and emails the client automatically.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
       <div>
         <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
           Quoted price (USD)
@@ -233,6 +268,7 @@ function OrderDetailPanel({ order }) {
             Deposit: {order.deposit_paid ? "Paid" : "Pending"} · Final: {order.final_paid ? "Paid" : "Pending"}
           </p>
         )}
+      </div>
       </div>
     </div>
   );

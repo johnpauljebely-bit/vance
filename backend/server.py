@@ -36,6 +36,7 @@ load_dotenv(ROOT_DIR / ".env")
 
 from fastapi import (
     APIRouter,
+    BackgroundTasks,
     Depends,
     FastAPI,
     File,
@@ -55,9 +56,11 @@ from starlette.middleware.cors import CORSMiddleware
 
 from email_service import (
     email_deposit_confirmed,
-    email_magic_link,
     email_new_message,
     email_order_delivered,
+    email_order_status_update,
+    email_otp_code,
+    email_payment_request,
     email_request_accepted,
     email_request_declined,
     email_review_request,
@@ -83,8 +86,6 @@ ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "admin@vance.design")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "changeme")
 FROM_EMAIL = os.environ.get("FROM_EMAIL", "hello@vance.design")
 
-CLIENT_DEV_PASSWORD = os.environ.get("CLIENT_DEV_PASSWORD", "DEVTEST")
-
 STRIPE_SECRET_KEY = os.environ.get("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET", "")
 if STRIPE_SECRET_KEY:
@@ -98,9 +99,15 @@ EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
 MIME_TYPES = {
     "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png",
     "gif": "image/gif", "webp": "image/webp", "pdf": "application/pdf",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "zip": "application/zip",
 }
 IMAGE_MAX_BYTES = 10 * 1024 * 1024  # 10 MB
-ALLOWED_UPLOAD_EXTS = {"jpg", "jpeg", "png", "gif", "webp"}
+# Image types (for reference uploads/portfolio) plus common document types
+# for message attachments — PDF had a MIME entry above but was never in this
+# allowlist, so PDFs were silently rejected.
+ALLOWED_UPLOAD_EXTS = {"jpg", "jpeg", "png", "gif", "webp", "pdf", "doc", "docx", "zip"}
 
 logging.basicConfig(
     level=logging.INFO,
@@ -480,7 +487,7 @@ async def admin_mark_read(request_id: str, admin=Depends(require_admin)) -> dict
 
 @api.post("/admin/requests/{request_id}/accept")
 async def admin_accept_request(
-    request_id: str, payload: RequestActionIn, admin=Depends(require_admin)
+    request_id: str, payload: RequestActionIn, background_tasks: BackgroundTasks, admin=Depends(require_admin)
 ) -> dict:
     req = await db.requests.find_one({"id": request_id})
     if not req:
@@ -526,14 +533,14 @@ async def admin_accept_request(
         "updated_at": now,
     }
     await db.orders.insert_one(order)
-    email_request_accepted(to=req["email"], name=req["name"], order_id=order_id)
+    background_tasks.add_task(email_request_accepted, to=req["email"], name=req["name"], order_id=order_id)
     logger.info("Request %s accepted → order %s created", request_id, order_id)
     return {"ok": True, "order_id": order_id}
 
 
 @api.post("/admin/requests/{request_id}/decline")
 async def admin_decline_request(
-    request_id: str, payload: RequestActionIn, admin=Depends(require_admin)
+    request_id: str, payload: RequestActionIn, background_tasks: BackgroundTasks, admin=Depends(require_admin)
 ) -> dict:
     req = await db.requests.find_one({"id": request_id})
     if not req:
@@ -550,7 +557,9 @@ async def admin_decline_request(
             }
         },
     )
-    # TODO(Phase 3.5): dispatch "Request Declined" email.
+    background_tasks.add_task(
+        email_request_declined, to=req["email"], name=req["name"], reason=payload.reason or None
+    )
     logger.info("Request %s declined", request_id)
     return {"ok": True}
 
@@ -594,7 +603,7 @@ ALLOWED_ORDER_STATUSES = {
 
 @api.patch("/admin/orders/{order_id}/status")
 async def admin_update_order_status(
-    order_id: str, payload: OrderStatusIn, admin=Depends(require_admin)
+    order_id: str, payload: OrderStatusIn, background_tasks: BackgroundTasks, admin=Depends(require_admin)
 ) -> dict:
     if payload.status not in ALLOWED_ORDER_STATUSES:
         raise HTTPException(400, f"Invalid status: {payload.status}")
@@ -622,15 +631,28 @@ async def admin_update_order_status(
         {"id": order_id},
         {"$set": {"status": payload.status, "updated_at": now, "activity": activity}},
     )
-    # Fire status-based emails
-    try:
-        if payload.status == "In Queue":
-            email_deposit_confirmed(to=order["client_email"], name=order["client_name"], order_id=order_id)
-        elif payload.status in ("Delivered – Awaiting Final Payment", "Delivered – Awaiting Review"):
-            email_order_delivered(to=order["client_email"], name=order["client_name"], order_id=order_id)
-            email_review_request(to=order["client_email"], name=order["client_name"], order_id=order_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Status email failed: %s", exc)
+    # Every status change notifies the client — richer templates for the two
+    # milestone transitions, a generic status email for everything else, so
+    # coverage is total rather than limited to a couple of special cases.
+    if payload.status == "In Queue":
+        background_tasks.add_task(
+            email_deposit_confirmed, to=order["client_email"], name=order["client_name"], order_id=order_id
+        )
+    elif payload.status in ("Delivered – Awaiting Final Payment", "Delivered – Awaiting Review"):
+        background_tasks.add_task(
+            email_order_delivered, to=order["client_email"], name=order["client_name"], order_id=order_id
+        )
+        background_tasks.add_task(
+            email_review_request, to=order["client_email"], name=order["client_name"], order_id=order_id
+        )
+    else:
+        background_tasks.add_task(
+            email_order_status_update,
+            to=order["client_email"],
+            name=order["client_name"],
+            order_id=order_id,
+            status=payload.status,
+        )
     return {"ok": True, "status": payload.status}
 
 
@@ -754,7 +776,7 @@ def _safe_str_eq(a: str, b: str) -> bool:
     return result == 0
 
 
-# ------------------------------------------------------------------ client portal auth (magic-link + DEVTEST bypass)
+# ------------------------------------------------------------------ client portal auth (email + 6-digit OTP)
 def create_client_token(email: str, name: Optional[str] = None) -> str:
     payload = {
         "sub": email.lower(),
@@ -778,59 +800,71 @@ def require_client(authorization: Optional[str] = Header(default=None)) -> dict:
 
 class PortalLoginIn(BaseModel):
     email: EmailStr
-    password: Optional[str] = None
 
 
-class PortalVerifyIn(BaseModel):
-    token: str
+class PortalVerifyOtpIn(BaseModel):
+    email: EmailStr
+    code: str
+
+
+OTP_EXPIRY_MINUTES = 10
+OTP_MAX_ATTEMPTS = 3
+OTP_RESEND_COOLDOWN_SECONDS = 45
 
 
 @api.post("/portal/login")
 async def portal_login(payload: PortalLoginIn) -> dict:
-    """Two modes:
-    - DEVTEST password → immediate session (dev shortcut per user's request)
-    - No password → generate one-time magic link, email it, return {sent:true}
-    """
+    """Email a 6-digit one-time code. Requires a prior commission request on
+    file for this address — same "no account" behavior as before, just
+    without leaking which emails exist (still returns a generic error only
+    when there truly is no request, matching the pre-existing UX)."""
     email = payload.email.lower()
-    # DEV shortcut
-    if payload.password and payload.password == CLIENT_DEV_PASSWORD:
-        # Ensure at least one order exists for this email? Not required.
-        req = await db.requests.find_one({"email": email})
-        name = req["name"] if req else email.split("@")[0]
-        return {
-            "mode": "password",
-            "access_token": create_client_token(email, name),
-            "email": email,
-        }
-
-    # Magic-link mode: requires a prior commission request on file
     req = await db.requests.find_one({"email": email})
     if not req:
         raise HTTPException(404, "You need to create an order first.")
 
-    link_token = secrets.token_urlsafe(32)
-    await db.magic_links.insert_one(
+    existing = await db.otp_codes.find_one({"email": email}, sort=[("created_at", -1)])
+    if existing:
+        last_sent = datetime.fromisoformat(existing["created_at"])
+        elapsed = (datetime.now(timezone.utc) - last_sent).total_seconds()
+        if elapsed < OTP_RESEND_COOLDOWN_SECONDS:
+            wait = int(OTP_RESEND_COOLDOWN_SECONDS - elapsed)
+            raise HTTPException(429, f"Please wait {wait}s before requesting another code")
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    await db.otp_codes.insert_one(
         {
-            "token": link_token,
             "email": email,
-            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=30)).isoformat(),
+            "code": code,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRY_MINUTES)).isoformat(),
+            "attempts": 0,
             "used": False,
             "created_at": now_iso(),
         }
     )
-    email_magic_link(to=email, name=req["name"], link_token=link_token)
-    return {"mode": "magic-link", "sent": True}
+    email_otp_code(to=email, name=req["name"], code=code)
+    return {"sent": True, "expires_in_minutes": OTP_EXPIRY_MINUTES}
 
 
-@api.post("/portal/verify")
-async def portal_verify(payload: PortalVerifyIn) -> dict:
-    record = await db.magic_links.find_one({"token": payload.token, "used": False})
+@api.post("/portal/verify-otp")
+async def portal_verify_otp(payload: PortalVerifyOtpIn) -> dict:
+    email = payload.email.lower()
+    record = await db.otp_codes.find_one({"email": email, "used": False}, sort=[("created_at", -1)])
     if not record:
-        raise HTTPException(400, "Invalid or already-used link")
+        raise HTTPException(400, "No active code — request a new one")
     if datetime.fromisoformat(record["expires_at"]) < datetime.now(timezone.utc):
-        raise HTTPException(400, "Link expired")
-    await db.magic_links.update_one({"token": payload.token}, {"$set": {"used": True}})
-    email = record["email"]
+        raise HTTPException(400, "Code expired — request a new one")
+    if record["attempts"] >= OTP_MAX_ATTEMPTS:
+        raise HTTPException(429, "Too many attempts — request a new code")
+
+    if payload.code.strip() != record["code"]:
+        await db.otp_codes.update_one({"_id": record["_id"]}, {"$inc": {"attempts": 1}})
+        remaining = OTP_MAX_ATTEMPTS - (record["attempts"] + 1)
+        if remaining <= 0:
+            raise HTTPException(429, "Too many attempts — request a new code")
+        raise HTTPException(400, f"Incorrect code — {remaining} attempt(s) left")
+
+    await db.otp_codes.update_one({"_id": record["_id"]}, {"$set": {"used": True}})
     req = await db.requests.find_one({"email": email})
     name = req["name"] if req else email.split("@")[0]
     return {"access_token": create_client_token(email, name), "email": email}
@@ -873,7 +907,7 @@ def _payment_amount_cents(order: dict, stage: str) -> int:
     return round(float(price) * 0.5 * 100)
 
 
-async def _confirm_payment(order_id: str, stage: str, *, method: str) -> None:
+async def _confirm_payment(order_id: str, stage: str, *, method: str, background_tasks: BackgroundTasks) -> None:
     order = await db.orders.find_one({"id": order_id})
     if not order:
         return
@@ -895,14 +929,17 @@ async def _confirm_payment(order_id: str, stage: str, *, method: str) -> None:
             "$push": {"activity": {"at": now, "note": f"{stage.title()} payment confirmed via {method}", "actor": "system"}},
         },
     )
-    try:
-        if stage == "deposit":
-            email_deposit_confirmed(to=order["client_email"], name=order["client_name"], order_id=order_id)
-        else:
-            email_order_delivered(to=order["client_email"], name=order["client_name"], order_id=order_id)
-            email_review_request(to=order["client_email"], name=order["client_name"], order_id=order_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Payment-confirmed email failed: %s", exc)
+    if stage == "deposit":
+        background_tasks.add_task(
+            email_deposit_confirmed, to=order["client_email"], name=order["client_name"], order_id=order_id
+        )
+    else:
+        background_tasks.add_task(
+            email_order_delivered, to=order["client_email"], name=order["client_name"], order_id=order_id
+        )
+        background_tasks.add_task(
+            email_review_request, to=order["client_email"], name=order["client_name"], order_id=order_id
+        )
 
 
 class CreatePaymentIntentIn(BaseModel):
@@ -933,7 +970,7 @@ async def portal_create_payment_intent(
 
 
 @api.post("/webhooks/stripe")
-async def stripe_webhook(request: Request) -> dict:
+async def stripe_webhook(request: Request, background_tasks: BackgroundTasks) -> dict:
     if not STRIPE_SECRET_KEY:
         raise HTTPException(503, "Stripe is not configured")
     payload = await request.body()
@@ -953,7 +990,7 @@ async def stripe_webhook(request: Request) -> dict:
         metadata = intent.get("metadata", {})
         order_id, stage = metadata.get("order_id"), metadata.get("stage")
         if order_id and stage:
-            await _confirm_payment(order_id, stage, method="stripe")
+            await _confirm_payment(order_id, stage, method="stripe", background_tasks=background_tasks)
     return {"received": True}
 
 
@@ -991,28 +1028,53 @@ class ConfirmPaymentIn(BaseModel):
 
 
 @api.post("/admin/orders/{order_id}/confirm-payment")
-async def admin_confirm_payment(order_id: str, payload: ConfirmPaymentIn, admin=Depends(require_admin)) -> dict:
+async def admin_confirm_payment(
+    order_id: str, payload: ConfirmPaymentIn, background_tasks: BackgroundTasks, admin=Depends(require_admin)
+) -> dict:
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Order not found")
-    await _confirm_payment(order_id, payload.stage, method=payload.method)
+    await _confirm_payment(order_id, payload.stage, method=payload.method, background_tasks=background_tasks)
     doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return doc
 
 
 # ------------------------------------------------------------------ messages (shared: admin + client)
 class MessageIn(BaseModel):
-    body: str = Field(..., min_length=1, max_length=10000)
+    body: str = Field(default="", max_length=10000)
     attachment_file_ids: List[str] = Field(default_factory=list)
 
 
-async def _persist_message(order_id: str, from_side: str, body: str, attachments: list) -> dict:
+async def _persist_message(
+    order_id: str, from_side: str, body: str, attachments: list, *, kind: str = "text", payload: Optional[dict] = None
+) -> dict:
+    if kind == "text" and not body.strip() and not attachments:
+        raise HTTPException(400, "Message needs text or an attachment")
+
+    # Denormalize filename/content-type onto the message so the frontend can
+    # render an inline image preview vs. a document link without a second
+    # round-trip per attachment.
+    attachment_meta = []
+    for file_id in attachments:
+        record = await db.files.find_one({"id": file_id, "is_deleted": False})
+        if record:
+            attachment_meta.append(
+                {
+                    "file_id": file_id,
+                    "filename": record.get("original_filename", file_id),
+                    "content_type": record.get("content_type", "application/octet-stream"),
+                }
+            )
+
     doc = {
         "id": str(uuid.uuid4()),
         "order_id": order_id,
         "from_side": from_side,  # "admin" | "client"
+        "kind": kind,  # "text" | "payment_request"
         "body": body,
+        "payload": payload,
         "attachment_file_ids": attachments,
+        "attachments": attachment_meta,
         "read_by_admin": from_side == "admin",
         "read_by_client": from_side == "client",
         "created_at": now_iso(),
@@ -1020,6 +1082,13 @@ async def _persist_message(order_id: str, from_side: str, body: str, attachments
     await db.messages.insert_one(doc)
     doc.pop("_id", None)
     return doc
+
+
+# Slash-command registry for the admin message composer — general pattern so
+# new payment-request types (or other embed-card commands) are one line to
+# add, not a one-off hardcoded to "-deposit".
+PAYMENT_COMMAND_STAGES = {"deposit": "deposit", "final": "final", "invoice": "final"}
+_COMMAND_RE = re.compile(r"^-(\w+)$")
 
 
 @api.get("/admin/orders/{order_id}/messages")
@@ -1035,14 +1104,36 @@ async def admin_list_messages(order_id: str, admin=Depends(require_admin)) -> Li
 
 @api.post("/admin/orders/{order_id}/messages")
 async def admin_send_message(
-    order_id: str, payload: MessageIn, admin=Depends(require_admin)
+    order_id: str, payload: MessageIn, background_tasks: BackgroundTasks, admin=Depends(require_admin)
 ) -> dict:
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Order not found")
+
+    command_match = _COMMAND_RE.match(payload.body.strip())
+    stage = PAYMENT_COMMAND_STAGES.get(command_match.group(1).lower()) if command_match else None
+    if stage:
+        if not order.get("quoted_price"):
+            raise HTTPException(400, "Set a quoted price for this order before requesting payment")
+        amount = round(order["quoted_price"] * 0.5, 2)
+        msg = await _persist_message(
+            order_id, "admin", "", [], kind="payment_request", payload={"stage": stage, "amount": amount}
+        )
+        background_tasks.add_task(
+            email_payment_request,
+            to=order["client_email"],
+            name=order["client_name"],
+            order_id=order_id,
+            stage=stage,
+            amount=amount,
+        )
+        return msg
+
     msg = await _persist_message(order_id, "admin", payload.body, payload.attachment_file_ids)
-    # Fire-and-forget email notification to client
-    email_new_message(
+    # Genuinely fire-and-forget: email fires after the response is sent, so a
+    # slow/blocking SMTP round-trip never delays message delivery.
+    background_tasks.add_task(
+        email_new_message,
         to=order["client_email"],
         name=order["client_name"],
         order_id=order_id,
@@ -1067,13 +1158,14 @@ async def portal_list_messages(order_id: str, client=Depends(require_client)) ->
 
 @api.post("/portal/orders/{order_id}/messages")
 async def portal_send_message(
-    order_id: str, payload: MessageIn, client=Depends(require_client)
+    order_id: str, payload: MessageIn, background_tasks: BackgroundTasks, client=Depends(require_client)
 ) -> dict:
     order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
     if not order:
         raise HTTPException(404, "Order not found")
     msg = await _persist_message(order_id, "client", payload.body, payload.attachment_file_ids)
-    email_new_message(
+    background_tasks.add_task(
+        email_new_message,
         to=ADMIN_EMAIL,
         name="Vance",
         order_id=order_id,
@@ -1157,7 +1249,9 @@ class SendKitIn(BaseModel):
 
 
 @api.post("/admin/orders/{order_id}/send-kit")
-async def admin_send_kit(order_id: str, payload: SendKitIn, admin=Depends(require_admin)) -> dict:
+async def admin_send_kit(
+    order_id: str, payload: SendKitIn, background_tasks: BackgroundTasks, admin=Depends(require_admin)
+) -> dict:
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(404, "Order not found")
@@ -1175,7 +1269,8 @@ async def admin_send_kit(order_id: str, payload: SendKitIn, admin=Depends(requir
     file_id = zip_url.rsplit("/", 1)[-1]
 
     msg = await _persist_message(order_id, "admin", payload.message, [file_id])
-    email_new_message(
+    background_tasks.add_task(
+        email_new_message,
         to=order["client_email"],
         name=order["client_name"],
         order_id=order_id,
