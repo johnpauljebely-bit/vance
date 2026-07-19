@@ -24,3 +24,4 @@ numpy>=1.26.0
 python-multipart>=0.0.9
 Pillow>=10.0.0
 stripe>=7.0.0
+fpdf2>=2.8.0

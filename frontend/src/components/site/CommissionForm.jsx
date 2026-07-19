@@ -193,6 +193,9 @@ export default function CommissionForm() {
           </div>
         )}
 
+        {settings && settings.open_slots === 0 ? (
+          <WaitlistSignup />
+        ) : (
         <form
           onSubmit={onSubmit}
           data-testid="commission-form"
@@ -357,8 +360,86 @@ export default function CommissionForm() {
             </button>
           </div>
         </form>
+        )}
       </div>
     </section>
+  );
+}
+
+function WaitlistSignup() {
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [joined, setJoined] = useState(false);
+
+  const onSubmit = async (e) => {
+    e.preventDefault();
+    if (!name.trim() || !email.includes("@")) {
+      toast.error("Enter your name and a valid email");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await publicApi.joinWaitlist(name.trim(), email.trim().toLowerCase());
+      setJoined(true);
+      toast.success("You're on the waitlist!");
+    } catch (err) {
+      toast.error(err?.response?.data?.detail || "Could not join waitlist");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  if (joined) {
+    return (
+      <div data-testid="waitlist-success" className="mt-10 card-base text-center">
+        <CheckCircle2 size={32} className="mx-auto text-[#22C55E]" />
+        <h3 className="mt-3 text-xl font-bold tracking-[-0.02em]">You're on the list.</h3>
+        <p className="mt-2 text-[#1A1A1A]/70">
+          I'll email you the moment a commission slot opens up.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} data-testid="waitlist-form" className="mt-10 card-base space-y-5" noValidate>
+      <div className="text-center">
+        <p className="text-xs font-bold uppercase tracking-[0.2em] section-accent-text">Commissions are full</p>
+        <h3 className="mt-2 text-2xl font-bold tracking-[-0.02em]">Join the waitlist.</h3>
+        <p className="mt-2 text-[#1A1A1A]/70">
+          I'll email you as soon as a slot opens up so you can submit your request.
+        </p>
+      </div>
+      <Field label="Your name" required>
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          data-testid="waitlist-name-input"
+          className="input-base"
+          placeholder="Jane Doe"
+        />
+      </Field>
+      <Field label="Email address" required>
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          data-testid="waitlist-email-input"
+          className="input-base"
+          placeholder="jane@example.com"
+        />
+      </Field>
+      <button
+        type="submit"
+        disabled={submitting}
+        data-testid="waitlist-submit-btn"
+        className="btn-primary w-full justify-center"
+      >
+        {submitting ? <Loader2 size={16} className="animate-spin" /> : "Notify me when a slot opens"}
+      </button>
+    </form>
   );
 }
 

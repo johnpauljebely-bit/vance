@@ -7,6 +7,9 @@ import { toast } from "sonner";
 import { ArrowLeft, Star, Loader2, MessageSquare, Download, FileText } from "lucide-react";
 import PaymentDueCard from "./PaymentDueCard";
 import MessageComposer from "@/components/site/MessageComposer";
+import AnnotationCanvas from "@/components/site/AnnotationCanvas";
+
+const ANNOTATABLE_STATUSES = new Set(["Final Review", "Delivered – Awaiting Review"]);
 
 const STATUS_SEQUENCE = [
   "New",
@@ -14,9 +17,23 @@ const STATUS_SEQUENCE = [
   "In Queue",
   "Sketching",
   "Final Review",
+  "Delivered – Awaiting Final Payment",
   "Delivered – Awaiting Review",
   "Closed",
 ];
+
+// Rough indicator, not meant to be precise — a quick "how far along" glance
+// alongside the step-by-step timeline above.
+const STATUS_PROGRESS = {
+  New: 5,
+  "Accepted – Awaiting Deposit": 10,
+  "In Queue": 25,
+  Sketching: 50,
+  "Final Review": 75,
+  "Delivered – Awaiting Final Payment": 90,
+  "Delivered – Awaiting Review": 90,
+  Closed: 100,
+};
 
 export default function ClientPortalOrder() {
   const { id } = useParams();
@@ -83,6 +100,18 @@ export default function ClientPortalOrder() {
         data-testid="order-status-bar"
         className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-5 md:p-6"
       >
+        <div className="mb-4 flex items-center justify-between">
+          <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">Progress</p>
+          <p className="text-xs font-bold tabular-nums text-[#FF6B35]" data-testid="order-progress-pct">
+            {STATUS_PROGRESS[order.status] ?? 0}%
+          </p>
+        </div>
+        <div className="mb-5 h-1.5 w-full overflow-hidden rounded-full bg-[#1A1A1A]/10">
+          <div
+            className="h-full rounded-full bg-[#FF6B35] transition-all duration-500 ease-in-out"
+            style={{ width: `${STATUS_PROGRESS[order.status] ?? 0}%` }}
+          />
+        </div>
         <div className="relative">
           {/* Each dot is centered within its own 1/n-width flex slot, so its
               true center sits at (i+0.5)/n of the row — not i/(n-1). The
@@ -178,7 +207,84 @@ function OverviewTab({ order }) {
         </div>
       </div>
 
+      {order.invoices && order.invoices.length > 0 && <ReceiptsCard invoices={order.invoices} />}
+
+      {order.delivered_logo_url && ANNOTATABLE_STATUSES.has(order.status) && (
+        <RevisionAnnotationsCard orderId={order.id} imageUrl={order.delivered_logo_url} />
+      )}
+
       {order.status === "Closed" && <BrandKitCard orderId={order.id} />}
+    </div>
+  );
+}
+
+function ReceiptsCard({ invoices }) {
+  return (
+    <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6" data-testid="receipts-card">
+      <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">Receipts</p>
+      <div className="mt-3 space-y-2">
+        {invoices.map((inv) => (
+          <div
+            key={inv.file_id}
+            data-testid={`receipt-row-${inv.file_id}`}
+            className="flex items-center justify-between rounded-[12px] bg-[#F7F5F2] px-4 py-3"
+          >
+            <div>
+              <p className="text-sm font-semibold">
+                ${inv.amount.toFixed(2)} USD <span className="capitalize text-[#8A8588]">· {inv.stage}</span>
+              </p>
+              <p className="text-xs text-[#8A8588]">
+                {inv.receipt_number} · {new Date(inv.created_at).toLocaleDateString()}
+              </p>
+            </div>
+            <a
+              href={portalApi.receiptUrl(inv.file_id)}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid={`receipt-download-${inv.file_id}`}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#FF6B35] hover:underline"
+            >
+              <Download size={13} /> Download
+            </a>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RevisionAnnotationsCard({ orderId, imageUrl }) {
+  const qc = useQueryClient();
+  const { data: annotations = [] } = useQuery({
+    queryKey: ["portal-annotations", orderId],
+    queryFn: () => portalApi.listAnnotations(orderId),
+    refetchInterval: 4000,
+  });
+
+  const addPin = useMutation({
+    mutationFn: (payload) => portalApi.createAnnotation(orderId, payload),
+    onSuccess: () => {
+      toast.success("Feedback pinned");
+      qc.invalidateQueries({ queryKey: ["portal-annotations", orderId] });
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to add pin"),
+  });
+
+  return (
+    <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6" data-testid="revision-annotations-card">
+      <p className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">Leave feedback on the design</p>
+      <p className="mt-1 text-sm text-[#1A1A1A]/70">
+        Click anywhere on the preview to pin a specific note instead of describing it in words.
+      </p>
+      <div className="mt-4">
+        <AnnotationCanvas
+          imageUrl={imageUrl}
+          annotations={annotations}
+          interactive
+          adding={addPin.isPending}
+          onAddPin={(pin) => addPin.mutate(pin)}
+        />
+      </div>
     </div>
   );
 }

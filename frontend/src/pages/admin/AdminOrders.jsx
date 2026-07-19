@@ -3,8 +3,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { adminApi, publicApi, ORDER_STATUSES } from "@/lib/api";
 import StatusPill from "@/pages/admin/_StatusPill";
 import { toast } from "sonner";
-import { ChevronDown, ChevronUp, Loader2, Upload, CheckCircle2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2, Upload, CheckCircle2, XCircle } from "lucide-react";
 import FileDropzone from "@/components/site/FileDropzone";
+import AnnotationCanvas from "@/components/site/AnnotationCanvas";
+
+const ANNOTATABLE_STATUSES = new Set(["Final Review", "Delivered – Awaiting Review"]);
 
 export default function AdminOrders() {
   const [filter, setFilter] = useState("All");
@@ -66,14 +69,17 @@ export default function AdminOrders() {
                       <StatusPill status={o.status} />
                     </td>
                     <td className="px-6 py-4 text-[#1A1A1A]/80">
-                      <div className="flex items-center gap-2">
-                        {o.payment_status || "—"}
-                        {o.payment_confirmation_requested && (
-                          <span className="rounded-pill bg-[#FF6B35] px-2 py-0.5 text-[10px] font-bold text-white">
-                            {o.payment_confirmation_requested.method} pending
-                          </span>
-                        )}
-                      </div>
+                      {o.payment_confirmation_requested ? (
+                        <span
+                          className="inline-flex items-center gap-1.5 rounded-pill bg-[#6B7280]/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-[#6B7280]"
+                          data-testid={`payment-pending-pill-${o.id}`}
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full bg-[#6B7280]" />
+                          Awaiting confirmation · {o.payment_confirmation_requested.method}
+                        </span>
+                      ) : (
+                        o.payment_status || "—"
+                      )}
                     </td>
                     <td className="px-6 py-4 text-xs text-[#8A8588] tabular-nums">
                       {new Date(o.updated_at).toLocaleDateString()}
@@ -107,8 +113,21 @@ function OrderDetailPanel({ order }) {
   const [darkAccent, setDarkAccent] = useState(order.accent_color_dark ?? "");
   const [lightAccent, setLightAccent] = useState(order.accent_color_light ?? "");
   const [deadline, setDeadline] = useState(order.deadline ?? "");
+  const [closingOpen, setClosingOpen] = useState(false);
+  const [closeReason, setCloseReason] = useState("");
 
   const invalidate = () => qc.invalidateQueries({ queryKey: ["admin-orders"] });
+
+  const closeOrder = useMutation({
+    mutationFn: () => adminApi.closeOrder(order.id, closeReason.trim()),
+    onSuccess: () => {
+      toast.success("Order closed — client notified by email");
+      setClosingOpen(false);
+      setCloseReason("");
+      invalidate();
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to close order"),
+  });
 
   const updateStatus = useMutation({
     mutationFn: (status) => adminApi.updateOrderStatus(order.id, status),
@@ -210,6 +229,54 @@ function OrderDetailPanel({ order }) {
           Every change logs to the order activity and emails the client automatically.
         </p>
       </div>
+
+      {order.status !== "Closed" && (
+        <div className="mb-5" onClick={(e) => e.stopPropagation()}>
+          {!closingOpen ? (
+            <button
+              type="button"
+              onClick={() => setClosingOpen(true)}
+              data-testid={`order-close-btn-${order.id}`}
+              className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#EF4444] hover:underline"
+            >
+              <XCircle size={14} /> Close order
+            </button>
+          ) : (
+            <div className="rounded-[14px] border border-[#EF4444]/30 bg-[#EF4444]/5 p-3">
+              <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+                Close order — reason (sent to client)
+              </label>
+              <textarea
+                value={closeReason}
+                onChange={(e) => setCloseReason(e.target.value)}
+                data-testid={`order-close-reason-${order.id}`}
+                className="input-base mt-1.5 resize-y"
+                rows={2}
+                placeholder="e.g. Project cancelled at client's request, refund issued."
+              />
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => closeOrder.mutate()}
+                  disabled={closeOrder.isPending}
+                  data-testid={`order-close-confirm-${order.id}`}
+                  className="rounded-pill bg-[#EF4444] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-60"
+                >
+                  {closeOrder.isPending ? <Loader2 size={13} className="animate-spin" /> : "Confirm close"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setClosingOpen(false)}
+                  data-testid={`order-close-cancel-${order.id}`}
+                  className="btn-secondary !px-3 !py-1.5 text-xs"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
       <div>
@@ -353,6 +420,46 @@ function OrderDetailPanel({ order }) {
           </p>
         )}
       </div>
+      </div>
+
+      {order.delivered_logo_url && ANNOTATABLE_STATUSES.has(order.status) && (
+        <AdminAnnotationsSection orderId={order.id} imageUrl={order.delivered_logo_url} />
+      )}
+    </div>
+  );
+}
+
+function AdminAnnotationsSection({ orderId, imageUrl }) {
+  const qc = useQueryClient();
+  const { data: annotations = [] } = useQuery({
+    queryKey: ["admin-annotations", orderId],
+    queryFn: () => adminApi.listAnnotations(orderId),
+    refetchInterval: 6000,
+  });
+
+  const deletePin = useMutation({
+    mutationFn: (annotationId) => adminApi.deleteAnnotation(orderId, annotationId),
+    onSuccess: () => {
+      toast.success("Pin cleared");
+      qc.invalidateQueries({ queryKey: ["admin-annotations", orderId] });
+    },
+    onError: (e) => toast.error(e?.response?.data?.detail || "Failed to delete"),
+  });
+
+  if (annotations.length === 0) return null;
+
+  return (
+    <div className="mt-5 border-t border-[rgba(26,26,26,0.06)] pt-5" onClick={(e) => e.stopPropagation()}>
+      <label className="text-xs font-bold uppercase tracking-widest text-[#8A8588]">
+        Client revision pins ({annotations.length})
+      </label>
+      <div className="mt-2 max-w-lg">
+        <AnnotationCanvas
+          imageUrl={imageUrl}
+          annotations={annotations}
+          interactive={false}
+          onDeletePin={(id) => deletePin.mutate(id)}
+        />
       </div>
     </div>
   );

@@ -15,6 +15,8 @@ import logging
 import os
 import socket
 import time
+from email import encoders
+from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Optional
@@ -166,8 +168,10 @@ def _log_only(to: str, subject: str, html: str) -> None:
     logger.info("EMAIL preview: %s...", preview)
 
 
-def send_email(*, to: str, subject: str, html: str) -> bool:
-    """Send an email via the Gmail API. Returns True on success. Falls back to console-log on failure."""
+def send_email(*, to: str, subject: str, html: str, attachment: Optional[dict] = None) -> bool:
+    """Send an email via the Gmail API. Returns True on success. Falls back
+    to console-log on failure. `attachment`, if given, is
+    {"filename": str, "data": bytes, "content_type": str} — e.g. a PDF receipt."""
     subject_full = f"{subject} | Do Not Reply"
     token = _get_access_token()
     if not token:
@@ -175,11 +179,22 @@ def send_email(*, to: str, subject: str, html: str) -> bool:
         _log_only(to, subject_full, html)
         return False
 
-    msg = MIMEMultipart("alternative")
+    msg = MIMEMultipart("mixed")
     msg["Subject"] = subject_full
     msg["From"] = f"Vance <{FROM_EMAIL}>"
     msg["To"] = to
-    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    alt = MIMEMultipart("alternative")
+    alt.attach(MIMEText(html, "html", "utf-8"))
+    msg.attach(alt)
+
+    if attachment:
+        maintype, _, subtype = attachment["content_type"].partition("/")
+        part = MIMEBase(maintype or "application", subtype or "octet-stream")
+        part.set_payload(attachment["data"])
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{attachment["filename"]}"')
+        msg.attach(part)
 
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode("ascii")
     try:
@@ -382,4 +397,73 @@ def email_payment_request(*, to: str, name: str, order_id: str, stage: str, amou
             button_label="Pay Now",
             button_link=portal_url(f"/portal/orders/{order_id}#payment-due"),
         ),
+    )
+
+
+def email_order_closed(*, to: str, name: str, order_id: str, reason: Optional[str] = None) -> None:
+    reason_html = f"<p><strong>Reason:</strong> {reason}</p>" if reason else ""
+    body = f"""
+      <p>Hey {name},</p>
+      <p>Your commission has been closed.</p>
+      {reason_html}
+      <p>If you have any questions about this, feel free to reach out — your Client Portal stays
+      accessible for your records.</p>
+      <p>— Vance</p>
+    """
+    send_email(
+        to=to,
+        subject="Commission Closed",
+        html=render_email(
+            headline="Your commission has been closed",
+            body_html=body,
+            button_label="View Order",
+            button_link=portal_url(f"/portal/orders/{order_id}"),
+        ),
+    )
+
+
+def email_waitlist_slot_open(*, to: str, name: str) -> None:
+    body = f"""
+      <p>Hey {name},</p>
+      <p>Good news — a commission slot just opened up! You're welcome to submit your request
+      whenever you're ready.</p>
+      <p>Spots go quickly, so I'd recommend getting your request in soon.</p>
+      <p>— Vance</p>
+    """
+    send_email(
+        to=to,
+        subject="A Commission Slot Is Open",
+        html=render_email(
+            headline="A slot just opened up",
+            body_html=body,
+            button_label="Start a Commission",
+            button_link=portal_url("/#request"),
+        ),
+    )
+
+
+def email_payment_receipt(
+    *, to: str, name: str, order_id: str, amount: float, receipt_number: str, pdf_bytes: bytes
+) -> None:
+    body = f"""
+      <p>Hey {name},</p>
+      <p>Thanks for your payment of <strong>${amount:.2f} USD</strong> — your receipt
+      (#{receipt_number}) is attached as a PDF for your records.</p>
+      <p>You can also download it anytime from your Client Portal.</p>
+      <p>— Vance</p>
+    """
+    send_email(
+        to=to,
+        subject="Payment Receipt",
+        html=render_email(
+            headline="Here's your receipt",
+            body_html=body,
+            button_label="View Order",
+            button_link=portal_url(f"/portal/orders/{order_id}"),
+        ),
+        attachment={
+            "filename": f"{receipt_number}.pdf",
+            "data": pdf_bytes,
+            "content_type": "application/pdf",
+        },
     )

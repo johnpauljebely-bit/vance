@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { adminApi } from "@/lib/api";
 import { Link } from "react-router-dom";
-import { ArrowUpRight, Inbox, Package, TrendingUp, CheckCircle2 } from "lucide-react";
+import { ArrowUpRight, Inbox, Package, TrendingUp, CheckCircle2, Clock } from "lucide-react";
 import StatusPill from "@/pages/admin/_StatusPill";
 
 export default function AdminDashboard() {
@@ -9,6 +9,11 @@ export default function AdminDashboard() {
     queryKey: ["admin-summary"],
     queryFn: adminApi.getSummary,
     refetchInterval: 15000,
+  });
+
+  const { data: waitlist } = useQuery({
+    queryKey: ["admin-waitlist"],
+    queryFn: adminApi.listWaitlist,
   });
 
   const stats = [
@@ -157,6 +162,29 @@ export default function AdminDashboard() {
           </div>
         </div>
       </div>
+
+      {waitlist && waitlist.count > 0 && (
+        <div className="rounded-[20px] border border-[rgba(26,26,26,0.08)] bg-white p-6" data-testid="dashboard-waitlist">
+          <div className="flex items-center gap-2">
+            <Clock size={16} className="text-[#8A8588]" />
+            <h2 className="text-lg font-bold tracking-[-0.02em]">Waitlist ({waitlist.count})</h2>
+          </div>
+          <p className="mt-1 text-xs text-[#8A8588]">
+            Notified automatically, in join order, when a slot opens up.
+          </p>
+          <div className="mt-4 divide-y divide-[rgba(26,26,26,0.08)]">
+            {waitlist.entries.map((w) => (
+              <div key={w.id} className="flex items-center justify-between py-2.5 text-sm">
+                <div>
+                  <p className="font-semibold">{w.name}</p>
+                  <p className="text-xs text-[#8A8588]">{w.email}</p>
+                </div>
+                <time className="text-xs text-[#8A8588]">{formatRelative(w.joined_at)}</time>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

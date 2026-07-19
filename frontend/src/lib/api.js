@@ -28,6 +28,7 @@ export const publicApi = {
   getPortfolioHome: () => client.get("/portfolio/home").then((r) => r.data),
   getPortfolioItem: (id) => client.get(`/portfolio/${id}`).then((r) => r.data),
   submitRequest: (payload) => client.post("/requests", payload).then((r) => r.data),
+  joinWaitlist: (name, email) => client.post("/waitlist", { name, email }).then((r) => r.data),
   uploadReference: (file) => {
     const form = new FormData();
     form.append("file", file);
@@ -68,6 +69,11 @@ export const adminApi = {
   getOrder: (id) => client.get(`/admin/orders/${id}`).then((r) => r.data),
   updateOrderStatus: (id, status) =>
     client.patch(`/admin/orders/${id}/status`, { status }).then((r) => r.data),
+  closeOrder: (id, reason) => client.post(`/admin/orders/${id}/close`, { reason }).then((r) => r.data),
+  listWaitlist: () => client.get("/admin/waitlist").then((r) => r.data),
+  listAnnotations: (id) => client.get(`/admin/orders/${id}/annotations`).then((r) => r.data),
+  deleteAnnotation: (orderId, annotationId) =>
+    client.delete(`/admin/orders/${orderId}/annotations/${annotationId}`).then((r) => r.data),
   updateOrderPricing: (id, quoted_price) =>
     client.patch(`/admin/orders/${id}/pricing`, { quoted_price }).then((r) => r.data),
   updateDeliveredLogo: (id, delivered_logo_url) =>
@@ -149,6 +155,13 @@ export const portalApi = {
       .post(`/portal/orders/${id}/payment/mark-requested`, { stage, method })
       .then((r) => r.data),
   brandKitUrl: (id) => `${API_BASE}/portal/orders/${id}/brand-kit`,
+  receiptUrl: (fileId) => `${API_BASE}/files/${fileId}`,
+  listAnnotations: (id) => clientClient.get(`/portal/orders/${id}/annotations`).then((r) => r.data),
+  createAnnotation: (id, payload) =>
+    clientClient.post(`/portal/orders/${id}/annotations`, payload).then((r) => r.data),
+  getPreferences: () => clientClient.get("/portal/preferences").then((r) => r.data),
+  updatePreferences: (notification_level) =>
+    clientClient.patch("/portal/preferences", { notification_level }).then((r) => r.data),
 };
 
 export const adminMsgApi = {

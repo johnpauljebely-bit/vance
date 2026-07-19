@@ -57,14 +57,18 @@ from starlette.middleware.cors import CORSMiddleware
 from email_service import (
     email_deposit_confirmed,
     email_new_message,
+    email_order_closed,
     email_order_delivered,
     email_order_status_update,
     email_otp_code,
+    email_payment_receipt,
     email_payment_request,
     email_request_accepted,
     email_request_declined,
     email_review_request,
+    email_waitlist_slot_open,
 )
+from invoice_service import generate_receipt_pdf
 from image_service import (
     apply_corner_watermark,
     apply_watermark_layers,
@@ -401,18 +405,29 @@ async def health() -> dict:
     return {"ok": True, "storage": _storage_key is not None, "time": now_iso()}
 
 
+# The client's own "major milestones only" preference only ever suppresses
+# these two "minor" email types — request-accepted, deposit-confirmed,
+# delivered, and payment-request emails are never touched by it.
+_MINOR_NOTIFICATION_KEYS = {"notify_new_message", "notify_status_update"}
+
+
 async def _notifications_enabled(key: str, client_email: Optional[str] = None) -> bool:
-    """Per-client override takes precedence over the global setting — lets
-    admin mute a specific noisy client without turning an email type off
-    for everyone. Only meaningful for emails actually sent to a client;
-    admin-facing notifications (e.g. "client sent a message") always use
-    the global setting since there's no per-client concept for those."""
+    """Three layers, most-specific-wins: admin's explicit per-client
+    override > the client's own stated preference > the global default.
+    Only meaningful for emails actually sent to a client; admin-facing
+    notifications (e.g. "client sent a message") always use the global
+    setting since there's no per-client concept for those."""
     if client_email:
-        note = await db.client_notes.find_one({"email": client_email.lower()})
+        email = client_email.lower()
+        note = await db.client_notes.find_one({"email": email})
         if note:
             override = (note.get("notification_overrides") or {}).get(key)
             if override is not None:
                 return override
+        if key in _MINOR_NOTIFICATION_KEYS:
+            pref = await db.client_preferences.find_one({"email": email})
+            if pref and pref.get("notification_level") == "major_milestones_only":
+                return False
     doc = await db.settings.find_one({"_id": "singleton"}, {key: 1})
     return doc.get(key, True) if doc else True
 
@@ -632,6 +647,7 @@ async def admin_accept_request(
         "accent_color_light": None,
         "full_payment_requested": False,
         "deadline": None,
+        "invoices": [],
         "unique_payment_code": f"VC-{uuid.uuid4().hex[:6].upper()}",
         "revision_count": 0,
         "activity": [
@@ -771,6 +787,51 @@ async def admin_update_order_status(
             _log_email, to=order["client_email"], subject="Order Status Update", order_id=order_id
         )
     return {"ok": True, "status": payload.status}
+
+
+class OrderCloseIn(BaseModel):
+    reason: str = Field(default="", max_length=2000)
+
+
+@api.post("/admin/orders/{order_id}/close")
+async def admin_close_order(
+    order_id: str, payload: OrderCloseIn, background_tasks: BackgroundTasks, admin=Depends(require_admin)
+) -> dict:
+    """Deliberate admin close (abandoned project, refund, etc.) — distinct
+    from the normal client-review-triggered Closed status: takes a reason,
+    doesn't require a review on file, and frees up a commission slot."""
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(404, "Order not found")
+
+    now = now_iso()
+    reason = payload.reason.strip()
+    activity = order.get("activity", [])
+    activity.append(
+        {"at": now, "note": f"Order closed by admin — {reason or 'no reason given'}", "actor": "admin"}
+    )
+    await db.orders.update_one(
+        {"id": order_id},
+        {"$set": {"status": "Closed", "close_reason": reason or None, "updated_at": now, "activity": activity}},
+    )
+    background_tasks.add_task(
+        email_order_closed, to=order["client_email"], name=order["client_name"], order_id=order_id, reason=reason or None
+    )
+    background_tasks.add_task(_log_email, to=order["client_email"], subject="Commission Closed", order_id=order_id)
+
+    settings_doc = await db.settings.find_one({"_id": "singleton"}) or {}
+    prev_open_slots = int(settings_doc.get("open_slots", 0))
+    total_slots = int(settings_doc.get("total_slots", prev_open_slots))
+    new_open_slots = min(prev_open_slots + 1, total_slots) if total_slots else prev_open_slots + 1
+    if new_open_slots != prev_open_slots:
+        await db.settings.update_one(
+            {"_id": "singleton"}, {"$set": {"open_slots": new_open_slots, "last_content_updated": now}}
+        )
+        if prev_open_slots <= 0 and new_open_slots > 0:
+            await _notify_waitlist(background_tasks)
+
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return doc
 
 
 class OrderPricingIn(BaseModel):
@@ -916,10 +977,24 @@ async def admin_get_settings(admin=Depends(require_admin)) -> dict:
     return doc
 
 
+async def _notify_waitlist(background_tasks: BackgroundTasks) -> None:
+    """Email everyone on the waitlist, in join order, then clear it — a
+    one-time "a slot opened up" ping, not an ongoing subscription."""
+    entries = await db.waitlist.find({}, {"_id": 0}).sort("joined_at", 1).to_list(1000)
+    for entry in entries:
+        background_tasks.add_task(email_waitlist_slot_open, to=entry["email"], name=entry["name"])
+        background_tasks.add_task(_log_email, to=entry["email"], subject="A Commission Slot Is Open")
+    if entries:
+        await db.waitlist.delete_many({})
+
+
 @api.patch("/admin/settings")
 async def admin_update_settings(
-    payload: SettingsUpdateIn, admin=Depends(require_admin)
+    payload: SettingsUpdateIn, background_tasks: BackgroundTasks, admin=Depends(require_admin)
 ) -> dict:
+    current = await db.settings.find_one({"_id": "singleton"}) or {}
+    prev_open_slots = int(current.get("open_slots", 0))
+
     updates: dict = {}
     if payload.open_slots is not None:
         if payload.open_slots < 0:
@@ -953,9 +1028,39 @@ async def admin_update_settings(
         raise HTTPException(400, "No changes provided")
     updates["last_content_updated"] = now_iso()
     await db.settings.update_one({"_id": "singleton"}, {"$set": updates})
+
+    new_open_slots = updates.get("open_slots", prev_open_slots)
+    if prev_open_slots <= 0 and new_open_slots > 0:
+        await _notify_waitlist(background_tasks)
+
     doc = await db.settings.find_one({"_id": "singleton"})
     doc.pop("_id", None)
     return doc
+
+
+class WaitlistJoinIn(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    email: str = Field(..., min_length=3, max_length=200)
+
+
+@api.post("/waitlist")
+async def join_waitlist(payload: WaitlistJoinIn) -> dict:
+    email = payload.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(400, "Enter a valid email address")
+    existing = await db.waitlist.find_one({"email": email})
+    if existing:
+        return {"ok": True, "already_joined": True}
+    await db.waitlist.insert_one(
+        {"id": str(uuid.uuid4()), "name": payload.name.strip(), "email": email, "joined_at": now_iso()}
+    )
+    return {"ok": True, "already_joined": False}
+
+
+@api.get("/admin/waitlist")
+async def admin_list_waitlist(admin=Depends(require_admin)) -> dict:
+    entries = await db.waitlist.find({}, {"_id": 0}).sort("joined_at", 1).to_list(1000)
+    return {"count": len(entries), "entries": entries}
 
 
 def _safe_str_eq(a: str, b: str) -> bool:
@@ -1066,6 +1171,29 @@ async def portal_me(client=Depends(require_client)) -> dict:
     return {"email": client["sub"], "name": client.get("name"), "role": client["role"]}
 
 
+class ClientPreferencesIn(BaseModel):
+    notification_level: str  # "all" | "major_milestones_only"
+
+
+@api.get("/portal/preferences")
+async def portal_get_preferences(client=Depends(require_client)) -> dict:
+    pref = await db.client_preferences.find_one({"email": client["sub"].lower()}, {"_id": 0})
+    return {"notification_level": pref.get("notification_level", "all") if pref else "all"}
+
+
+@api.patch("/portal/preferences")
+async def portal_update_preferences(payload: ClientPreferencesIn, client=Depends(require_client)) -> dict:
+    if payload.notification_level not in ("all", "major_milestones_only"):
+        raise HTTPException(400, "Invalid notification_level")
+    email = client["sub"].lower()
+    await db.client_preferences.update_one(
+        {"email": email},
+        {"$set": {"email": email, "notification_level": payload.notification_level, "updated_at": now_iso()}},
+        upsert=True,
+    )
+    return {"notification_level": payload.notification_level}
+
+
 # ------------------------------------------------------------------ client portal — orders
 @api.get("/portal/orders")
 async def portal_list_orders(client=Depends(require_client)) -> List[dict]:
@@ -1084,6 +1212,71 @@ async def portal_get_order(order_id: str, client=Depends(require_client)) -> dic
     if not doc:
         raise HTTPException(404, "Order not found")
     return doc
+
+
+# ------------------------------------------------------------------ revision annotation pins
+ANNOTATABLE_STATUSES = {"Final Review", "Delivered – Awaiting Review"}
+
+
+class AnnotationIn(BaseModel):
+    x_pct: float = Field(..., ge=0, le=1)
+    y_pct: float = Field(..., ge=0, le=1)
+    comment: str = Field(..., min_length=1, max_length=1000)
+
+
+@api.get("/portal/orders/{order_id}/annotations")
+async def portal_list_annotations(order_id: str, client=Depends(require_client)) -> List[dict]:
+    order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    return await db.annotations.find({"order_id": order_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+
+
+@api.post("/portal/orders/{order_id}/annotations")
+async def portal_create_annotation(
+    order_id: str, payload: AnnotationIn, background_tasks: BackgroundTasks, client=Depends(require_client)
+) -> dict:
+    order = await db.orders.find_one({"id": order_id, "client_email": client["sub"]})
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if order.get("status") not in ANNOTATABLE_STATUSES:
+        raise HTTPException(400, "Annotations are only available during Final Review or after delivery")
+    if not order.get("delivered_logo_url"):
+        raise HTTPException(400, "No preview image attached to this order yet")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "x_pct": payload.x_pct,
+        "y_pct": payload.y_pct,
+        "comment": payload.comment.strip(),
+        "created_by": "client",
+        "created_at": now_iso(),
+    }
+    await db.annotations.insert_one(doc)
+    doc.pop("_id", None)
+    if await _notifications_enabled("notify_new_message", order["client_email"]):
+        background_tasks.add_task(
+            email_new_message,
+            to=ADMIN_EMAIL,
+            name="Vance",
+            order_id=order_id,
+            preview=f"New revision pin: {payload.comment.strip()[:150]}",
+            from_side="client",
+        )
+    return doc
+
+
+@api.get("/admin/orders/{order_id}/annotations")
+async def admin_list_annotations(order_id: str, admin=Depends(require_admin)) -> List[dict]:
+    return await db.annotations.find({"order_id": order_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
+
+
+@api.delete("/admin/orders/{order_id}/annotations/{annotation_id}")
+async def admin_delete_annotation(order_id: str, annotation_id: str, admin=Depends(require_admin)) -> dict:
+    result = await db.annotations.delete_one({"id": annotation_id, "order_id": order_id})
+    if result.deleted_count == 0:
+        raise HTTPException(404, "Annotation not found")
+    return {"ok": True}
 
 
 # ------------------------------------------------------------------ payments
@@ -1142,6 +1335,46 @@ async def _confirm_payment(order_id: str, stage: str, *, method: str, background
         )
         background_tasks.add_task(_log_email, to=order["client_email"], subject="Design Delivered", order_id=order_id)
         background_tasks.add_task(_log_email, to=order["client_email"], subject="Leave a Review", order_id=order_id)
+
+    # Auto-generate a PDF receipt for every confirmed payment, regardless of
+    # method (Stripe/Interac/Robux all funnel through this one function) —
+    # attached to its own email and made downloadable from the Client Portal.
+    price = order.get("quoted_price") or 0
+    receipt_amount = float(price) if full_payment else float(price) * 0.5
+    receipt_stage = "full" if full_payment else stage
+    receipt_number = f"{order.get('unique_payment_code', order_id[:8])}-{receipt_stage.upper()}"
+    pdf_bytes = generate_receipt_pdf(
+        order=order, stage=receipt_stage, amount=receipt_amount, method=method, receipt_number=receipt_number
+    )
+    receipt_url = await _save_generated(
+        "receipts", f"{receipt_number}.pdf", pdf_bytes, content_type="application/pdf", kind="receipt"
+    )
+    receipt_file_id = receipt_url.rsplit("/", 1)[-1]
+    await db.orders.update_one(
+        {"id": order_id},
+        {
+            "$push": {
+                "invoices": {
+                    "stage": receipt_stage,
+                    "file_id": receipt_file_id,
+                    "receipt_number": receipt_number,
+                    "amount": receipt_amount,
+                    "method": method,
+                    "created_at": now,
+                }
+            }
+        },
+    )
+    background_tasks.add_task(
+        email_payment_receipt,
+        to=order["client_email"],
+        name=order["client_name"],
+        order_id=order_id,
+        amount=receipt_amount,
+        receipt_number=receipt_number,
+        pdf_bytes=pdf_bytes,
+    )
+    background_tasks.add_task(_log_email, to=order["client_email"], subject="Payment Receipt", order_id=order_id)
 
 
 class CreatePaymentIntentIn(BaseModel):
